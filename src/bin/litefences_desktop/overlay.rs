@@ -491,7 +491,36 @@ pub fn hide_panel() {
     if app.mouse_hook == 0 {
         app.mouse_hook = crate::hooks::install_mouse();
     }
+    free_caches();
     log::info("收起面板");
+}
+
+/// 释放只在面板显示期间需要的资源：整屏位图缓存、字体、磨砂底板。
+///
+/// 整屏 32 位 DIB 在 2560×1440 下约 14.7 MB；常驻时不该一直背着它
+/// （验收线是常驻私有内存 < 20 MB），收起后它们都能按需重建。
+fn free_caches() {
+    let app = state();
+    // SAFETY: 只释放本模块创建的 GDI 对象；先删 DC 再删位图，位图才不会被选中的 DC 占着。
+    unsafe {
+        if !app.buffer_dc.is_null() {
+            DeleteDC(app.buffer_dc);
+            app.buffer_dc = std::ptr::null_mut();
+        }
+        if app.buffer_bitmap != 0 {
+            DeleteObject(app.buffer_bitmap as _);
+            app.buffer_bitmap = 0;
+        }
+        if !app.font.is_null() {
+            DeleteObject(app.font as _);
+            app.font = std::ptr::null_mut();
+        }
+    }
+    app.buffer_width = 0;
+    app.buffer_height = 0;
+    app.font_scale = 0.0;
+    app.backdrop = None;
+    app.static_dirty = true;
 }
 
 /// 后台扫描完成后重排布局并重绘。
