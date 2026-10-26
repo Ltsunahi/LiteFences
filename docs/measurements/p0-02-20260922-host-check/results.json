@@ -1,0 +1,2318 @@
+{
+  "schema_version": 1,
+  "kind": "P0-02 synthetic render microbenchmark; NOT S1 acceptance",
+  "created_utc": "2026-09-22T08:35:05.7995590Z",
+  "executable_sha256": "10D44559E4034138F8FDA1D73D0ED15218E63CFB1361746904B6464742DFD9F4",
+  "environment": {
+    "os": {
+      "caption": "Microsoft Windows 11 家庭版 中文版",
+      "build": "26200",
+      "ubr": "9457",
+      "full_build": "26200.9457",
+      "architecture": "amd64"
+    },
+    "cpu": {
+      "model": "AMD Ryzen 9 9955HX 16-Core Processor           ",
+      "logical_processors": 16
+    },
+    "ram": {
+      "total_bytes": 33484439552
+    },
+    "gpu": [
+      {
+        "name": "GameViewer Virtual Display Adapter",
+        "driver_version": "15.6.5.199"
+      },
+      {
+        "name": "AMD Radeon(TM) 610M",
+        "driver_version": "32.0.13034.7001"
+      },
+      {
+        "name": "NVIDIA GeForce RTX 5080 Laptop GPU",
+        "driver_version": "32.0.16.1664"
+      }
+    ],
+    "toolchain": {
+      "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+      "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+      "msvc": "14.51.36231",
+      "windows_sdk": "10.0.26100.0"
+    }
+  },
+  "settings": {
+    "rounds": 1,
+    "warmup_seconds": 5,
+    "duration_seconds": 20,
+    "interval_ms": 1000,
+    "scenario_order": "rotate by round"
+  },
+  "runs": [
+    {
+      "scenario": "empty",
+      "round": 1,
+      "status": "completed",
+      "sample_count": 21,
+      "metrics": {
+        "private_bytes_p95": 1777664.0,
+        "working_set_p95": 10403840.0,
+        "private_working_set_p95": 1249280.0,
+        "cpu_normalized_percent": 0.0,
+        "gdi_objects": 2.0,
+        "user_objects": 4.0
+      },
+      "metadata": {
+        "schema_version": 1,
+        "scenario": "empty",
+        "pid": 33464,
+        "client_width_px": 1120,
+        "client_height_px": 680,
+        "window_dpi": 120,
+        "render_dpi": 96,
+        "icon_count": 0,
+        "icon_size_px": 48,
+        "icon_pixel_bytes": 0,
+        "smoke": false,
+        "fixture": "opaque-bgra-deterministic-v1"
+      },
+      "before": {
+        "utc": "2026-09-22T08:35:05.8438910Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 405839872,
+            "working_set": 69267456,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 234491904,
+            "working_set": 191307776,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "unavailable",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      },
+      "steady_system": {
+        "utc": "2026-09-22T08:35:11.6991595Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 405966848,
+            "working_set": 70139904,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 234491904,
+            "working_set": 191307776,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "no matching GPU instance; not interpreted as zero",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      },
+      "measurement": {
+        "process_id": 33464,
+        "status": "completed",
+        "message": null,
+        "sample_count": 21,
+        "elapsed_seconds": 20.0079732,
+        "memory": {
+          "private_bytes": {
+            "p95": 1777664.0,
+            "peak": 1777664.0
+          },
+          "working_set": {
+            "p95": 10403840.0,
+            "peak": 10403840.0
+          },
+          "private_working_set": {
+            "p95": 1249280.0,
+            "peak": 1249280.0,
+            "valid_sample_count": 21,
+            "status": "collected: PROCESS_MEMORY_COUNTERS_EX2"
+          }
+        },
+        "cpu": {
+          "total_seconds_delta": 0.0,
+          "sample_elapsed_seconds": 19.9819699,
+          "logical_processors": 16,
+          "source": "GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)",
+          "normalized_percent": 0.0
+        },
+        "handle_count": 141,
+        "gdi_objects": {
+          "p95": 2.0,
+          "peak": 2.0
+        },
+        "user_objects": {
+          "p95": 4.0,
+          "peak": 4.0
+        },
+        "samples": [
+          {
+            "elapsed_seconds": 0.024943,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 1.0490968,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 2.0598899,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 3.0677671,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 4.0884854,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 5.1099887,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 6.1197375,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 7.1281044,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 8.1403123,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 9.1468083,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 10.1693413,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 11.1763901,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 12.1837559,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 13.1908937,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 14.2106103,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 15.2310319,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 16.2453826,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 17.2589881,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 18.2660021,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 19.2739175,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 20.0069129,
+            "data": {
+              "private_bytes": 1777664,
+              "working_set": 10403840,
+              "private_working_set": 1249280.0,
+              "cpu_seconds": 0.078125,
+              "handle_count": 141,
+              "gdi_objects": 2,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          }
+        ]
+      },
+      "exit_code": 0,
+      "after": {
+        "utc": "2026-09-22T08:35:31.8325182Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406048768,
+            "working_set": 70225920,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 234491904,
+            "working_set": 191066112,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "unavailable",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      }
+    },
+    {
+      "scenario": "gdi-surface",
+      "round": 1,
+      "status": "completed",
+      "sample_count": 21,
+      "metrics": {
+        "private_bytes_p95": 5144576.0,
+        "working_set_p95": 14311424.0,
+        "private_working_set_p95": 4411392.0,
+        "cpu_normalized_percent": 0.0,
+        "gdi_objects": 7.0,
+        "user_objects": 4.0
+      },
+      "metadata": {
+        "schema_version": 1,
+        "scenario": "gdi-surface",
+        "pid": 16960,
+        "client_width_px": 1120,
+        "client_height_px": 680,
+        "window_dpi": 120,
+        "render_dpi": 96,
+        "icon_count": 0,
+        "icon_size_px": 48,
+        "icon_pixel_bytes": 0,
+        "smoke": false,
+        "fixture": "opaque-bgra-deterministic-v1"
+      },
+      "before": {
+        "utc": "2026-09-22T08:35:31.8506435Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406048768,
+            "working_set": 70230016,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 234491904,
+            "working_set": 191066112,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "unavailable",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      },
+      "steady_system": {
+        "utc": "2026-09-22T08:35:36.9686595Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406048768,
+            "working_set": 70213632,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 234606592,
+            "working_set": 191111168,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "no matching GPU instance; not interpreted as zero",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      },
+      "measurement": {
+        "process_id": 16960,
+        "status": "completed",
+        "message": null,
+        "sample_count": 21,
+        "elapsed_seconds": 20.0119467,
+        "memory": {
+          "private_bytes": {
+            "p95": 5144576.0,
+            "peak": 5144576.0
+          },
+          "working_set": {
+            "p95": 14311424.0,
+            "peak": 14311424.0
+          },
+          "private_working_set": {
+            "p95": 4411392.0,
+            "peak": 4411392.0,
+            "valid_sample_count": 21,
+            "status": "collected: PROCESS_MEMORY_COUNTERS_EX2"
+          }
+        },
+        "cpu": {
+          "total_seconds_delta": 0.0,
+          "sample_elapsed_seconds": 20.0062305,
+          "logical_processors": 16,
+          "source": "GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)",
+          "normalized_percent": 0.0
+        },
+        "handle_count": 143,
+        "gdi_objects": {
+          "p95": 7.0,
+          "peak": 7.0
+        },
+        "user_objects": {
+          "p95": 4.0,
+          "peak": 4.0
+        },
+        "samples": [
+          {
+            "elapsed_seconds": 0.0056743,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 1.0224246,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 2.0340222,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 3.0558381,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 4.0666908,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 5.0865171,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 6.1079575,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 7.1152628,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 8.1332268,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 9.1418386,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 10.1602159,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 11.1695231,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 12.1799553,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 13.198331,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 14.2121591,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 15.220478,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 16.2263378,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 17.2344565,
+            "data": {
+              "private_bytes": 5144576,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 18.2433414,
+            "data": {
+              "private_bytes": 5115904,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 19.2491702,
+            "data": {
+              "private_bytes": 5115904,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 20.0119048,
+            "data": {
+              "private_bytes": 5115904,
+              "working_set": 14311424,
+              "private_working_set": 4411392.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 7,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          }
+        ]
+      },
+      "exit_code": 0,
+      "after": {
+        "utc": "2026-09-22T08:35:57.0624197Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406134784,
+            "working_set": 70672384,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 233422848,
+            "working_set": 190222336,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "unavailable",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      }
+    },
+    {
+      "scenario": "gdi-icons",
+      "round": 1,
+      "status": "completed",
+      "sample_count": 21,
+      "metrics": {
+        "private_bytes_p95": 7626752.0,
+        "working_set_p95": 16789504.0,
+        "private_working_set_p95": 6856704.0,
+        "cpu_normalized_percent": 0.0,
+        "gdi_objects": 207.0,
+        "user_objects": 4.0
+      },
+      "metadata": {
+        "schema_version": 1,
+        "scenario": "gdi-icons",
+        "pid": 21724,
+        "client_width_px": 1120,
+        "client_height_px": 680,
+        "window_dpi": 120,
+        "render_dpi": 96,
+        "icon_count": 200,
+        "icon_size_px": 48,
+        "icon_pixel_bytes": 1843200,
+        "smoke": false,
+        "fixture": "opaque-bgra-deterministic-v1"
+      },
+      "before": {
+        "utc": "2026-09-22T08:35:57.0715779Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406134784,
+            "working_set": 70672384,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 233422848,
+            "working_set": 190222336,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "unavailable",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      },
+      "steady_system": {
+        "utc": "2026-09-22T08:36:02.1842789Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406069248,
+            "working_set": 70656000,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 233553920,
+            "working_set": 190578688,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "no matching GPU instance; not interpreted as zero",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      },
+      "measurement": {
+        "process_id": 21724,
+        "status": "completed",
+        "message": null,
+        "sample_count": 21,
+        "elapsed_seconds": 20.0065176,
+        "memory": {
+          "private_bytes": {
+            "p95": 7626752.0,
+            "peak": 7626752.0
+          },
+          "working_set": {
+            "p95": 16789504.0,
+            "peak": 16789504.0
+          },
+          "private_working_set": {
+            "p95": 6856704.0,
+            "peak": 6856704.0,
+            "valid_sample_count": 21,
+            "status": "collected: PROCESS_MEMORY_COUNTERS_EX2"
+          }
+        },
+        "cpu": {
+          "total_seconds_delta": 0.0,
+          "sample_elapsed_seconds": 20.001063600000002,
+          "logical_processors": 16,
+          "source": "GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)",
+          "normalized_percent": 0.0
+        },
+        "handle_count": 143,
+        "gdi_objects": {
+          "p95": 207.0,
+          "peak": 207.0
+        },
+        "user_objects": {
+          "p95": 4.0,
+          "peak": 4.0
+        },
+        "samples": [
+          {
+            "elapsed_seconds": 0.0054174,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 1.0131163,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 2.0222269,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 3.0435949,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 4.0606106,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 5.0804365,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 6.0862248,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 7.1077481,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 8.1146238,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 9.1246316,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 10.1320173,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 11.1523858,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 12.1658857,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 13.1838973,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 14.196047,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 15.205139,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 16.2117502,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 17.2217923,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 18.2301899,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 19.2517828,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 20.006481,
+            "data": {
+              "private_bytes": 7626752,
+              "working_set": 16789504,
+              "private_working_set": 6856704.0,
+              "cpu_seconds": 0.0625,
+              "handle_count": 143,
+              "gdi_objects": 207,
+              "user_objects": 4,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          }
+        ]
+      },
+      "exit_code": 0,
+      "after": {
+        "utc": "2026-09-22T08:36:22.2533511Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406134784,
+            "working_set": 70701056,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 233795584,
+            "working_set": 190464000,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "unavailable",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      }
+    },
+    {
+      "scenario": "d2d-surface",
+      "round": 1,
+      "status": "completed",
+      "sample_count": 21,
+      "metrics": {
+        "private_bytes_p95": 60424192.0,
+        "working_set_p95": 43503616.0,
+        "private_working_set_p95": 12128256.0,
+        "cpu_normalized_percent": 0.0,
+        "gdi_objects": 6.0,
+        "user_objects": 7.0
+      },
+      "metadata": {
+        "schema_version": 1,
+        "scenario": "d2d-surface",
+        "pid": 10184,
+        "client_width_px": 1120,
+        "client_height_px": 680,
+        "window_dpi": 120,
+        "render_dpi": 96,
+        "icon_count": 0,
+        "icon_size_px": 48,
+        "icon_pixel_bytes": 0,
+        "smoke": false,
+        "fixture": "opaque-bgra-deterministic-v1"
+      },
+      "before": {
+        "utc": "2026-09-22T08:36:22.2633630Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406138880,
+            "working_set": 70709248,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 233795584,
+            "working_set": 190464000,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "unavailable",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      },
+      "steady_system": {
+        "utc": "2026-09-22T08:36:27.5696402Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406093824,
+            "working_set": 70684672,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 233795584,
+            "working_set": 190464000,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "collected: GPUProcessMemory across adapter instances",
+          "dedicated_bytes": 20062208.0,
+          "shared_bytes": 1585152.0,
+          "instances": [
+            {
+              "name": "pid_10184_luid_0x00000000_0x00010B7A_phys_0",
+              "dedicated_bytes": 20062208.0,
+              "shared_bytes": 1585152.0
+            }
+          ]
+        }
+      },
+      "measurement": {
+        "process_id": 10184,
+        "status": "completed",
+        "message": null,
+        "sample_count": 21,
+        "elapsed_seconds": 20.016803,
+        "memory": {
+          "private_bytes": {
+            "p95": 60424192.0,
+            "peak": 60424192.0
+          },
+          "working_set": {
+            "p95": 43503616.0,
+            "peak": 43503616.0
+          },
+          "private_working_set": {
+            "p95": 12128256.0,
+            "peak": 12128256.0,
+            "valid_sample_count": 21,
+            "status": "collected: PROCESS_MEMORY_COUNTERS_EX2"
+          }
+        },
+        "cpu": {
+          "total_seconds_delta": 0.0,
+          "sample_elapsed_seconds": 20.011316,
+          "logical_processors": 16,
+          "source": "GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)",
+          "normalized_percent": 0.0
+        },
+        "handle_count": 363,
+        "gdi_objects": {
+          "p95": 6.0,
+          "peak": 6.0
+        },
+        "user_objects": {
+          "p95": 7.0,
+          "peak": 7.0
+        },
+        "samples": [
+          {
+            "elapsed_seconds": 0.0054448,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43503616,
+              "private_working_set": 12128256.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 1.0231344,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43503616,
+              "private_working_set": 12128256.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 2.0325573,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43503616,
+              "private_working_set": 12128256.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 3.0511559,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43503616,
+              "private_working_set": 12128256.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 4.0606658,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43503616,
+              "private_working_set": 12128256.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 5.0698962,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43503616,
+              "private_working_set": 12128256.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 6.0812824,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43503616,
+              "private_working_set": 12128256.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 7.0904482,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43503616,
+              "private_working_set": 12128256.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 8.098325,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43503616,
+              "private_working_set": 12128256.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 9.1050861,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43503616,
+              "private_working_set": 12128256.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 10.1140807,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43503616,
+              "private_working_set": 12128256.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 11.1266962,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43261952,
+              "private_working_set": 11886592.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 12.1479105,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43261952,
+              "private_working_set": 11886592.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 13.1602257,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43261952,
+              "private_working_set": 11886592.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 14.1801015,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43261952,
+              "private_working_set": 11886592.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 15.1893601,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43261952,
+              "private_working_set": 11886592.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 16.2007505,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43261952,
+              "private_working_set": 11886592.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 17.2213815,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43261952,
+              "private_working_set": 11886592.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 18.2402402,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43261952,
+              "private_working_set": 11886592.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 19.2603388,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43261952,
+              "private_working_set": 11886592.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 20.0167608,
+            "data": {
+              "private_bytes": 60424192,
+              "working_set": 43261952,
+              "private_working_set": 11886592.0,
+              "cpu_seconds": 0.25,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          }
+        ]
+      },
+      "exit_code": 0,
+      "after": {
+        "utc": "2026-09-22T08:36:47.6837831Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406188032,
+            "working_set": 70766592,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 233406464,
+            "working_set": 190300160,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "unavailable",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      }
+    },
+    {
+      "scenario": "d2d-icons",
+      "round": 1,
+      "status": "completed",
+      "sample_count": 21,
+      "metrics": {
+        "private_bytes_p95": 66895872.0,
+        "working_set_p95": 46702592.0,
+        "private_working_set_p95": 15237120.0,
+        "cpu_normalized_percent": 0.0,
+        "gdi_objects": 6.0,
+        "user_objects": 7.0
+      },
+      "metadata": {
+        "schema_version": 1,
+        "scenario": "d2d-icons",
+        "pid": 2780,
+        "client_width_px": 1120,
+        "client_height_px": 680,
+        "window_dpi": 120,
+        "render_dpi": 96,
+        "icon_count": 200,
+        "icon_size_px": 48,
+        "icon_pixel_bytes": 1843200,
+        "smoke": false,
+        "fixture": "opaque-bgra-deterministic-v1"
+      },
+      "before": {
+        "utc": "2026-09-22T08:36:47.6976057Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406188032,
+            "working_set": 70766592,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 233406464,
+            "working_set": 190300160,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "unavailable",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      },
+      "steady_system": {
+        "utc": "2026-09-22T08:36:53.0144382Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406151168,
+            "working_set": 70750208,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 233406464,
+            "working_set": 190300160,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "collected: GPUProcessMemory across adapter instances",
+          "dedicated_bytes": 22622208.0,
+          "shared_bytes": 3436544.0,
+          "instances": [
+            {
+              "name": "pid_2780_luid_0x00000000_0x00010B7A_phys_0",
+              "dedicated_bytes": 22622208.0,
+              "shared_bytes": 3436544.0
+            }
+          ]
+        }
+      },
+      "measurement": {
+        "process_id": 2780,
+        "status": "completed",
+        "message": null,
+        "sample_count": 21,
+        "elapsed_seconds": 20.0266625,
+        "memory": {
+          "private_bytes": {
+            "p95": 66895872.0,
+            "peak": 66895872.0
+          },
+          "working_set": {
+            "p95": 46702592.0,
+            "peak": 46702592.0
+          },
+          "private_working_set": {
+            "p95": 15237120.0,
+            "peak": 15237120.0,
+            "valid_sample_count": 21,
+            "status": "collected: PROCESS_MEMORY_COUNTERS_EX2"
+          }
+        },
+        "cpu": {
+          "total_seconds_delta": 0.0,
+          "sample_elapsed_seconds": 20.0207202,
+          "logical_processors": 16,
+          "source": "GetActiveProcessorCount(ALL_PROCESSOR_GROUPS)",
+          "normalized_percent": 0.0
+        },
+        "handle_count": 365,
+        "gdi_objects": {
+          "p95": 6.0,
+          "peak": 6.0
+        },
+        "user_objects": {
+          "p95": 7.0,
+          "peak": 7.0
+        },
+        "samples": [
+          {
+            "elapsed_seconds": 0.0059078,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 1.0204275,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 2.0334912,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 3.0461833,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 4.0526576,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 5.0604464,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 6.0815196,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 7.0888004,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 8.1018142,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 9.1111959,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 10.1182581,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 11.1260047,
+            "data": {
+              "private_bytes": 66859008,
+              "working_set": 46702592,
+              "private_working_set": 15237120.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 363,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 12.1321082,
+            "data": {
+              "private_bytes": 66895872,
+              "working_set": 46481408,
+              "private_working_set": 15015936.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 365,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 13.1428662,
+            "data": {
+              "private_bytes": 66895872,
+              "working_set": 46481408,
+              "private_working_set": 15015936.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 365,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 14.1586938,
+            "data": {
+              "private_bytes": 66895872,
+              "working_set": 46481408,
+              "private_working_set": 15015936.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 365,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 15.1781355,
+            "data": {
+              "private_bytes": 66895872,
+              "working_set": 46481408,
+              "private_working_set": 15015936.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 365,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 16.1839572,
+            "data": {
+              "private_bytes": 66895872,
+              "working_set": 46481408,
+              "private_working_set": 15015936.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 365,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 17.1909316,
+            "data": {
+              "private_bytes": 66895872,
+              "working_set": 46481408,
+              "private_working_set": 15015936.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 365,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 18.2062416,
+            "data": {
+              "private_bytes": 66895872,
+              "working_set": 46481408,
+              "private_working_set": 15015936.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 365,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 19.2162793,
+            "data": {
+              "private_bytes": 66895872,
+              "working_set": 46481408,
+              "private_working_set": 15015936.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 365,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          },
+          {
+            "elapsed_seconds": 20.026628,
+            "data": {
+              "private_bytes": 66895872,
+              "working_set": 46481408,
+              "private_working_set": 15015936.0,
+              "cpu_seconds": 0.21875,
+              "handle_count": 365,
+              "gdi_objects": 6,
+              "user_objects": 7,
+              "main_window_visible": true,
+              "main_window_minimized": false
+            }
+          }
+        ]
+      },
+      "exit_code": 0,
+      "after": {
+        "utc": "2026-09-22T08:37:13.1395288Z",
+        "host_processes": [
+          {
+            "name": "dwm",
+            "process_id": 2208,
+            "private_bytes": 406237184,
+            "working_set": 70828032,
+            "start_utc": null,
+            "identity_status": "start time unavailable",
+            "status": "collected"
+          },
+          {
+            "name": "explorer",
+            "process_id": 12336,
+            "private_bytes": 233693184,
+            "working_set": 190709760,
+            "start_utc": "2026-09-22T08:04:13.2618982Z",
+            "identity_status": "pid and start time available",
+            "status": "collected"
+          }
+        ],
+        "gpu": {
+          "status": "unavailable",
+          "dedicated_bytes": null,
+          "shared_bytes": null,
+          "instances": []
+        }
+      }
+    }
+  ]
+}
