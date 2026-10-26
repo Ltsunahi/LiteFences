@@ -22,7 +22,7 @@ use windows_sys::Win32::Graphics::Gdi::{
     GetStockObject, HDC, HFONT, HOLLOW_BRUSH, InvalidateRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     MonitorFromPoint, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, PtInRect, RoundRect, SRCCOPY,
     SelectObject, SetBkMode, SetTextColor, TRANSPARENT, GetDC, ReleaseDC, NULL_PEN, Ellipse,
-    LineTo, MoveToEx, UpdateWindow,
+    LineTo, MoveToEx, UpdateWindow, IntersectClipRect, RestoreDC, SaveDC,
 };
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::UI::Controls::MARGINS;
@@ -36,7 +36,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN,
     TrackPopupMenu, WM_CHAR, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST, WM_PAINT,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
+    WM_PAINT,
     WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
@@ -78,6 +79,8 @@ pub struct Layout {
     pub height: i32,
     pub tiles: Vec<RECT>,
     pub headers: Vec<Header>,
+    /// 全部内容摆完后的纵向高度（含顶部工具条留白），比面板高时要滚动。
+    pub content_height: i32,
 }
 
 #[repr(C)]
@@ -350,6 +353,8 @@ pub fn show_panel() {
         top_dip,
     );
     app.layout = layout;
+    // 每次唤出都从顶部开始。
+    app.scroll = 0;
 
     // 自己抓一张桌面做磨砂底板（此时面板还没显示、桌面图标已隐藏）。
     if app.blur == BlurMode::Frost {
@@ -520,6 +525,7 @@ fn free_caches() {
     app.buffer_height = 0;
     app.font_scale = 0.0;
     app.backdrop = None;
+    app.scroll = 0;
     app.static_dirty = true;
 }
 
@@ -532,6 +538,8 @@ pub fn relayout() {
     let layout = compute_layout(&app.items, &app.groups, width, height, dpi, top_dip);
     app.layout = layout;
     app.hover = None;
+    // 内容变短了就把滚动量收回来，别停在空白处。
+    clamp_scroll(app);
     app.static_dirty = true;
     if app.shown {
         // SAFETY: 句柄有效；立刻重画，避免用户马上开始拖动时缓存还是旧布局。
@@ -847,6 +855,7 @@ pub fn compute_layout(
         height,
         tiles: vec![zero; items.len() + 1],
         headers: Vec::new(),
+        content_height: 0,
     };
     if groups.is_empty() {
         return layout;
@@ -873,28 +882,46 @@ pub fn compute_layout(
     buckets[default_index].push(items.len());
     let widest = buckets.iter().map(Vec::len).max().unwrap_or(0).max(1);
     let aspect = width as f32 / height.max(1) as f32;
-    let max_cols = ((width - 80).max(layout.cell_w) / layout.cell_w).max(1) as usize;
-    layout.cols = ((widest as f32 * aspect).sqrt().round() as usize).clamp(1, max_cols);
     let header_height = |scale: f32| (38.0 * scale) as i32;
     // 顶部要给工具条（低权限时还有警告横幅）让位。
     let top_inset = (top_dip * scale) as i32;
-    // 高度估算：放不下就等比缩小格子。
-    for _ in 0..6 {
+    // 当前列数下、按给定格子高度摆放需要多高（含标题行与组间距）。
+    let estimate = |cols: usize, cell_h: i32| -> i32 {
         let mut total = top_inset;
         for (group, bucket) in groups.iter().zip(&buckets) {
             total += header_height(scale);
             if !group.collapsed && !bucket.is_empty() {
-                let rows = bucket.len().div_ceil(layout.cols) as i32;
-                total += rows * layout.cell_h + (10.0 * scale) as i32;
+                let rows = bucket.len().div_ceil(cols.max(1)) as i32;
+                total += rows * cell_h + (10.0 * scale) as i32;
             }
         }
-        if total <= height - 30 || layout.cell_h <= 64 {
+        total
+    };
+    let cols_limit = |cell_w: i32| ((width - 80).max(cell_w) / cell_w).max(1) as usize;
+    // 列数不会超过最大一组的项数——多出来的列只会把每组挤到左边。
+    layout.cols = ((widest as f32 * aspect).sqrt().round() as usize)
+        .clamp(1, cols_limit(layout.cell_w))
+        .min(widest);
+    // 格子最小只缩到 96×104（按 DPI 缩放），再小名字就看不清了；剩下的交给滚动。
+    let floor_w = ((96.0 * scale) as i32).max(56);
+    let floor_h = ((104.0 * scale) as i32).max(64);
+    // 第一步：放不下就等比缩小格子。
+    for _ in 0..6 {
+        let total = estimate(layout.cols, layout.cell_h);
+        if total <= height - 30 || layout.cell_h <= floor_h {
             break;
         }
         let factor = ((height - 40) as f32 / total as f32).clamp(0.5, 0.92);
-        layout.cell_w = ((layout.cell_w as f32 * factor).round() as i32).max(56);
-        layout.cell_h = ((layout.cell_h as f32 * factor).round() as i32).max(64);
+        layout.cell_w = ((layout.cell_w as f32 * factor).round() as i32).max(floor_w);
+        layout.cell_h = ((layout.cell_h as f32 * factor).round() as i32).max(floor_h);
         layout.icon = ((layout.cell_h as f32 * 0.38).round() as i32).max(28);
+    }
+    // 第二步：多开几列（行数变少），尽量在一屏里放下。
+    while estimate(layout.cols, layout.cell_h) > height - 30
+        && layout.cols < cols_limit(layout.cell_w)
+        && layout.cols < widest
+    {
+        layout.cols += 1;
     }
     // 逐组摆放。
     let mut y = top_inset;
@@ -930,13 +957,52 @@ pub fn compute_layout(
         }
         y += bucket.len().div_ceil(layout.cols) as i32 * layout.cell_h + (10.0 * scale) as i32;
     }
+    layout.content_height = y;
     layout
+}
+
+/// 内容坐标（layout 里的 rect）→ 客户区坐标：减去滚动量。
+fn view_rect(app: &crate::state::App, rect: RECT) -> RECT {
+    RECT {
+        left: rect.left,
+        top: rect.top - app.scroll,
+        right: rect.right,
+        bottom: rect.bottom - app.scroll,
+    }
+}
+
+/// 客户区坐标 → 内容坐标：加上滚动量。
+fn content_point(app: &crate::state::App, x: i32, y: i32) -> POINT {
+    POINT {
+        x,
+        y: y + app.scroll,
+    }
+}
+
+/// 内容区顶边（工具条 / 低权限横幅之下），滚动裁剪和落点判定都用它。
+fn content_top(app: &crate::state::App) -> i32 {
+    let top_dip = if app.low_integrity { 88.0 } else { 48.0 };
+    (top_dip * app.layout.scale) as i32
+}
+
+/// 还能往下滚多少像素。
+fn max_scroll(app: &crate::state::App) -> i32 {
+    // 底部留出提示条的高度，滚到底时最后一行不会被提示条压住。
+    let pad = (56.0 * app.layout.scale) as i32;
+    (app.layout.content_height + pad - app.layout.height).max(0)
+}
+
+/// 布局/DPI 变化后把滚动量夹回合法范围。
+fn clamp_scroll(app: &mut crate::state::App) {
+    app.scroll = app.scroll.clamp(0, max_scroll(app));
 }
 
 /// 拖入时鼠标所在的组：按分组标题行划分纵向区域，标题下面到下一个标题都算该组。
 pub fn group_at_point(_x: i32, y: i32) -> Option<usize> {
     let app = state();
-    if app.layout.headers.is_empty() || y < app.layout.headers[0].rect.top || y >= app.layout.height {
+    // 换算到内容坐标后再按标题行划分。
+    let y = y + app.scroll;
+    if app.layout.headers.is_empty() || y < app.layout.headers[0].rect.top {
         return None;
     }
     app.layout
@@ -953,7 +1019,7 @@ pub fn first_group_screen_point() -> Option<(i32, i32)> {
     let header = app.layout.headers.first()?;
     let mut point = POINT {
         x: (header.rect.left + header.rect.right) / 2,
-        y: (header.rect.top + header.rect.bottom) / 2,
+        y: (header.rect.top + header.rect.bottom) / 2 - app.scroll,
     };
     // SAFETY: 句柄有效；只做坐标换算。
     let ok = unsafe { windows_sys::Win32::Graphics::Gdi::ClientToScreen(app.overlay, &mut point) };
@@ -973,7 +1039,7 @@ fn group_section_rect(app: &crate::state::App, group: usize) -> Option<RECT> {
         .headers
         .get(index + 1)
         .map(|next| next.rect.top)
-        .unwrap_or(app.layout.height);
+        .unwrap_or(app.layout.content_height + (24.0 * app.layout.scale) as i32);
     if bottom <= header.rect.top {
         return None;
     }
@@ -1099,6 +1165,7 @@ fn paint(hwnd: HWND) {
         draw_toolbar(hdc, app, &full);
         draw_search_box(hdc, app, &full);
         draw_drop_hover(hdc, app);
+        draw_scroll_indicator(hdc, app);
         if app.drag.is_some_and(|drag| drag.active) {
             draw_drag(hdc, app, &full);
         }
@@ -1202,8 +1269,12 @@ fn render_static(hdc: HDC, app: &mut crate::state::App, width: i32, height: i32)
             bottom: height,
         };
         draw_banner(hdc, app, &full);
+        // 滚动时内容会移到工具条/横幅底下，这里把内容裁到可见区里。
+        let saved = SaveDC(hdc);
+        IntersectClipRect(hdc, 0, content_top(app), width, height);
         draw_headers(hdc, app, &full);
         draw_items(hdc, app, &full);
+        RestoreDC(hdc, saved);
         draw_hint(hdc, app, &full);
     }
 }
@@ -1251,7 +1322,8 @@ fn ghost_rect(point: (i32, i32), icon: i32) -> RECT {
 fn draw_headers(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     let scale = app.layout.scale;
     for header in &app.layout.headers {
-        if !intersects(&header.rect, paint) {
+        let rect = view_rect(app, header.rect);
+        if !intersects(&rect, paint) {
             continue;
         }
         let Some(group) = app.groups.get(header.group) else {
@@ -1263,19 +1335,19 @@ fn draw_headers(hdc: HDC, app: &crate::state::App, paint: &RECT) {
         // SAFETY: 画笔与底色用完即释放。
         unsafe {
             let line = RECT {
-                left: header.rect.left,
-                top: header.rect.bottom - 1,
-                right: header.rect.right,
-                bottom: header.rect.bottom,
+                left: rect.left,
+                top: rect.bottom - 1,
+                right: rect.right,
+                bottom: rect.bottom,
             };
             let brush = CreateSolidBrush(0x0050_5050);
             FillRect(hdc, &line, brush);
             DeleteObject(brush as _);
-            let mut rect = RECT {
-                left: header.rect.left + (6.0 * scale) as i32,
-                top: header.rect.top,
-                right: header.rect.right,
-                bottom: header.rect.bottom,
+            let mut text_rect = RECT {
+                left: rect.left + (6.0 * scale) as i32,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
             };
             SetBkMode(hdc, TRANSPARENT as i32);
             SetTextColor(hdc, 0x00C8_C8C8);
@@ -1283,7 +1355,7 @@ fn draw_headers(hdc: HDC, app: &crate::state::App, paint: &RECT) {
                 hdc,
                 text.as_ptr(),
                 -1,
-                &mut rect,
+                &mut text_rect,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
             );
         }
@@ -1300,9 +1372,10 @@ fn draw_items(hdc: HDC, app: &crate::state::App, paint: &RECT) {
         SetBkMode(hdc, TRANSPARENT as i32);
         let tile_count = (app.items.len() + 1).min(app.layout.tiles.len());
         for index in 0..tile_count {
-            let Some(tile) = app.layout.tiles.get(index).copied() else {
+            let Some(raw) = app.layout.tiles.get(index).copied() else {
                 continue;
             };
+            let tile = view_rect(app, raw);
             if !intersects(&tile, paint) || tile.right <= tile.left {
                 continue;
             }
@@ -1501,6 +1574,48 @@ fn ensure_cache(hwnd: HWND) {
     }
 }
 
+/// 右侧滚动条：只有内容比面板高时才出现。
+fn draw_scroll_indicator(hdc: HDC, app: &crate::state::App) {
+    let max = max_scroll(app);
+    if max <= 0 {
+        return;
+    }
+    let scale = app.layout.scale;
+    let track_top = (60.0 * scale) as i32;
+    let track_bottom = app.layout.height - (60.0 * scale) as i32;
+    let visible = (track_bottom - track_top) as f32;
+    if visible < 80.0 {
+        return;
+    }
+    let x = app.layout.width - (12.0 * scale) as i32;
+    let width = (5.0 * scale).max(3.0) as i32;
+    let ratio = (app.layout.height as f32 / (app.layout.height + max) as f32).clamp(0.08, 1.0);
+    let thumb_h = (visible * ratio).max(24.0);
+    let progress = (app.scroll as f32 / max as f32).clamp(0.0, 1.0);
+    let thumb_top = track_top as f32 + (visible - thumb_h) * progress;
+    // SAFETY: 画刷用完即释放。
+    unsafe {
+        let track = RECT {
+            left: x,
+            top: track_top,
+            right: x + width,
+            bottom: track_bottom,
+        };
+        let brush = CreateSolidBrush(0x0030_3030);
+        FillRect(hdc, &track, brush);
+        DeleteObject(brush as _);
+        let thumb = RECT {
+            left: x,
+            top: thumb_top as i32,
+            right: x + width,
+            bottom: thumb_top as i32 + thumb_h as i32,
+        };
+        let brush = CreateSolidBrush(0x0090_9090);
+        FillRect(hdc, &thumb, brush);
+        DeleteObject(brush as _);
+    }
+}
+
 /// 拖入时给目标分组画框：标题行填色 + 整块描边，告诉用户“松手就加到这里”。
 fn draw_drop_hover(hdc: HDC, app: &crate::state::App) {
     let Some(group) = app.drop_hover else {
@@ -1519,15 +1634,20 @@ fn draw_drop_hover(hdc: HDC, app: &crate::state::App) {
         return;
     };
     let scale = app.layout.scale;
-    // SAFETY: 画刷用完即释放；字体已由 paint 选好。
+    let section = view_rect(app, section);
+    let header_rect = view_rect(app, header.rect);
+    // SAFETY: 画刷用完即释放；字体已由 paint 选好；只画在内容区里，别压到工具条。
     unsafe {
+        let saved = SaveDC(hdc);
+        IntersectClipRect(hdc, 0, content_top(app), app.layout.width, app.layout.height);
         let brush = CreateSolidBrush(0x0018_2C18);
-        FillRect(hdc, &header.rect, brush);
+        FillRect(hdc, &header_rect, brush);
         DeleteObject(brush as _);
         draw_outline(hdc, section, scale, 0x0090_E090);
+        RestoreDC(hdc, saved);
     }
     // 填色盖住了标题文字，补画一次。
-    draw_headers(hdc, app, &header.rect);
+    draw_headers(hdc, app, &header_rect);
 }
 
 /// 拖动排序的视觉反馈：目标格子描边 + 跟着鼠标的图标。
@@ -1541,11 +1661,13 @@ fn draw_drag(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     let scale = app.layout.scale;
     if let Some(target) = hit_test(drag.current.0, drag.current.1)
         && target < app.items.len()
-        && let Some(tile) = app.layout.tiles.get(target).copied()
-        && intersects(&tile, paint)
+        && let Some(raw) = app.layout.tiles.get(target).copied()
     {
-        // SAFETY: DC 有效。
-        unsafe { draw_target_outline(hdc, tile, scale) };
+        let tile = view_rect(app, raw);
+        if intersects(&tile, paint) {
+            // SAFETY: DC 有效。
+            unsafe { draw_target_outline(hdc, tile, scale) };
+        }
     }
     // SAFETY: DC 有效。
     unsafe { draw_ghost_icon(hdc, app, drag.from, drag.current) };
@@ -2055,6 +2177,8 @@ fn draw_banner(hdc: HDC, app: &crate::state::App, paint: &RECT) {
 
 fn hit_test(x: i32, y: i32) -> Option<usize> {
     let app = state();
+    // 格子存的是内容坐标，命中前要把鼠标位置换算到同一坐标系。
+    let y = y + app.scroll;
     app.layout
         .tiles
         .iter()
@@ -2267,16 +2391,13 @@ unsafe extern "system" fn overlay_proc(
                         let new_ghost = ghost_rect(drag.current, icon);
                         let target = hit_test(drag.current.0, drag.current.1)
                             .filter(|index| *index < app.items.len());
-                        let point = POINT {
-                            x: drag.current.0,
-                            y: drag.current.1,
-                        };
+                        let point = content_point(app, drag.current.0, drag.current.1);
                         let hover_header = app
                             .layout
                             .headers
                             .iter()
                             .find(|header| unsafe { PtInRect(&header.rect, point) != 0 })
-                            .map(|header| (header.group, header.rect));
+                            .map(|header| (header.group, view_rect(app, header.rect)));
                         // 先把缓存刷成当前布局，否则贴回的是旧画面（表现为“涂抹”）。
                         ensure_cache(hwnd);
                         // 直接画，不进 WM_PAINT：先贴回旧区域，再画新的跟随图标/目标框。
@@ -2288,14 +2409,14 @@ unsafe extern "system" fn overlay_proc(
                                     blit_region(hdc, app.buffer_dc, old);
                                 }
                                 if let Some(index) = drag.target
-                                    && let Some(tile) = app.layout.tiles.get(index).copied()
+                                    && let Some(raw) = app.layout.tiles.get(index).copied()
                                 {
-                                    blit_region(hdc, app.buffer_dc, tile);
+                                    blit_region(hdc, app.buffer_dc, view_rect(app, raw));
                                 }
                                 if let Some(index) = target
-                                    && let Some(tile) = app.layout.tiles.get(index).copied()
+                                    && let Some(raw) = app.layout.tiles.get(index).copied()
                                 {
-                                    draw_target_outline(hdc, tile, app.layout.scale);
+                                    draw_target_outline(hdc, view_rect(app, raw), app.layout.scale);
                                 }
                                 // 悬停到分组标题：整条高亮，松手就移入。
                                 if let Some(old) = drag.header_rect {
@@ -2391,6 +2512,30 @@ unsafe extern "system" fn overlay_proc(
             }
             0
         }
+        WM_MOUSEWHEEL => {
+            // 面板不抢焦点，靠系统“悬停时滚动非活动窗口”把滚轮送过来。
+            let app = state();
+            if !app.shown {
+                return 0;
+            }
+            let max = max_scroll(app);
+            if max <= 0 {
+                return 0;
+            }
+            let delta = ((wparam >> 16) & 0xffff) as u16 as i16 as i32;
+            let step = (app.layout.cell_h / 2).max(48);
+            let next = (app.scroll - (delta / 120) * step).clamp(0, max);
+            if next != app.scroll {
+                app.scroll = next;
+                app.static_dirty = true;
+                // SAFETY: 句柄有效；内容整体位移，整屏重画一帧。
+                unsafe {
+                    InvalidateRect(app.overlay, std::ptr::null(), 0);
+                    UpdateWindow(app.overlay);
+                }
+            }
+            0
+        }
         WM_LBUTTONDOWN => {
             // 输入框开着时，点面板第一下先关掉输入框。
             if crate::text_input::is_open() {
@@ -2449,11 +2594,12 @@ unsafe extern "system" fn overlay_proc(
                 // 点分组标题行：折叠/展开。
                 {
                     let app = state();
+                    let hit_point = content_point(app, x, y);
                     let hit = app
                         .layout
                         .headers
                         .iter()
-                        .find(|header| unsafe { PtInRect(&collapse_hit_rect(header), point) != 0 })
+                        .find(|header| unsafe { PtInRect(&collapse_hit_rect(header), hit_point) != 0 })
                         .map(|header| header.group);
                     if let Some(group_index) = hit {
                         toggle_group(group_index);
@@ -2508,10 +2654,11 @@ unsafe extern "system" fn overlay_proc(
                 let point = POINT { x, y };
                 let hovered_header = {
                     let app = state();
+                    let content = content_point(app, point.x, point.y);
                     app.layout
                         .headers
                         .iter()
-                        .find(|header| unsafe { PtInRect(&header.rect, point) != 0 })
+                        .find(|header| unsafe { PtInRect(&header.rect, content) != 0 })
                         .map(|header| header.group)
                 };
                 if let Some(group) = hovered_header {
@@ -2565,6 +2712,7 @@ unsafe extern "system" fn overlay_proc(
             let top_dip = if app.low_integrity { 88.0 } else { 48.0 };
             let layout = compute_layout(&app.items, &app.groups, width, height, dpi, top_dip);
             app.layout = layout;
+            app.scroll = 0;
             app.static_dirty = true;
             log::info(&format!("DPI 变化：{dpi}，面板 {width}x{height}"));
             // SAFETY: 句柄有效。
@@ -2575,5 +2723,84 @@ unsafe extern "system" fn overlay_proc(
             // SAFETY: 默认处理其余消息。
             unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
         }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    use crate::groups::Group;
+    use crate::icons::{DesktopItem, ItemSource};
+    use std::path::PathBuf;
+
+    fn item(name: &str) -> DesktopItem {
+        DesktopItem {
+            path: PathBuf::from(format!("C:\\桌面\\{name}")),
+            name: name.to_string(),
+            // 布局不碰图标句柄，空句柄足够。
+            icon: std::ptr::null_mut(),
+            source: ItemSource::Desktop,
+            custom_icon: None,
+        }
+    }
+
+    /// 造 n 个组、把 items 均分进去，最后一组用默认组名接住「添加图标」。
+    fn scene(items_n: usize, groups_n: usize) -> (Vec<DesktopItem>, Vec<Group>) {
+        let items: Vec<_> = (0..items_n).map(|i| item(&format!("i{i}"))).collect();
+        let mut groups: Vec<Group> = (0..groups_n.saturating_sub(1))
+            .map(|i| Group::new(format!("组{i}")))
+            .collect();
+        groups.push(Group::new(crate::groups::DEFAULT_GROUP));
+        for (index, item) in items.iter().enumerate() {
+            groups[index % groups_n].paths.push(item.path.clone());
+        }
+        (items, groups)
+    }
+
+    fn check(width: i32, height: i32, groups_n: usize, items_n: usize) {
+        let (items, groups) = scene(items_n, groups_n);
+        let layout = compute_layout(&items, &groups, width, height, 96, 48.0);
+        let label = format!("{width}x{height}, {groups_n} 组, {items_n} 项");
+        assert_eq!(layout.tiles.len(), items_n + 1, "格子数量不对：{label}");
+        // 横向必须始终放得下；纵向可以超出面板一屏，靠滚动看到（内容高度由 content_height 兜住）。
+        for (index, tile) in layout.tiles.iter().enumerate() {
+            if tile.right <= tile.left || tile.bottom <= tile.top {
+                panic!("第 {index} 格没有排出来：{label}");
+            }
+            assert!(
+                tile.left >= 0 && tile.right <= width,
+                "第 {index} 格横向越界 {}..{}：{label}",
+                tile.left,
+                tile.right
+            );
+            assert!(
+                tile.top >= 0 && tile.bottom <= layout.content_height,
+                "第 {index} 格纵向越界 {}..{}（内容高 {}）：{label}",
+                tile.top,
+                tile.bottom,
+                layout.content_height
+            );
+        }
+        assert!(!layout.headers.is_empty(), "没有分组标题：{label}");
+        assert!(
+            layout.headers.last().expect("标题").rect.bottom <= layout.content_height,
+            "最后一个标题行越界：{label}"
+        );
+        // 内容超过一屏时，必须能靠滚动看到最后一行：内容高度不能超过面板 + 最大滚动量。
+        let pad = 24;
+        let max_scroll = (layout.content_height + pad - height).max(0);
+        assert!(
+            layout.content_height + pad <= height + max_scroll,
+            "滚动量覆盖不到内容底部：{label}"
+        );
+    }
+
+    #[test]
+    fn tiles_fit_inside_the_panel() {
+        // 本机常见情况，以及小屏 + 多组 + 满额图标的极端情况。
+        check(2560, 1440, 1, 84);
+        check(1920, 1080, 3, 120);
+        check(1366, 768, 6, 150);
+        check(1280, 720, 8, 200);
     }
 }

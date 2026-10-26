@@ -177,6 +177,7 @@ pub fn run() -> std::process::ExitCode {
         buffer_width: 0,
         buffer_height: 0,
         static_dirty: true,
+        scroll: 0,
         desktop_stamp: None,
         backdrop: None,
         scan_rx: None,

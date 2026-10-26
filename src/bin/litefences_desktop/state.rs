@@ -180,6 +180,8 @@ pub struct App {
     pub drop_notice: Option<(String, Instant)>,
     /// 资源管理器重启后重新隐藏桌面图标的剩余重试次数。
     pub rehide_left: u32,
+    /// 面板内容的纵向滚动量（0 = 顶部）。内容比屏幕高时才用得上。
+    pub scroll: i32,
     /// 右上角「移除」开关是否开启：开启后单击图标即从面板移除。
     pub remove_mode: bool,
     /// 被手动隐藏的桌面图标。
