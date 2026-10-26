@@ -198,3 +198,18 @@ ok: 新建分组「自动测试B」，进程仍在运行
 [其它] / [自动测试A] / [自动测试B]
 final_alive=False (关闭后应为 False)  → PASS
 ```
+
+## 2026-10-26：资源管理器重启后的图标状态（M3 一项）
+
+以前 Explorer 重启时只重建托盘图标：面板开着的话，桌面图标会跟着恢复可见，而我们记的 `icons_hidden=true` 没变，
+等面板收起时再切一次反而把桌面图标藏住了。
+
+现在 `TaskbarCreated` 里额外做两件事：
+
+- 桌面图标应该藏着的（面板正显示、`icons_hidden` 为真）就再藏一次；DefView 刚重建时可能还不存在，
+  所以用 700 ms 的定时器重试最多 3 次，仍失败就记 `icons_hidden=false` 交给下次唤出，不会卡在错误状态。
+- 顺手重扫一遍桌面图标（集合可能变了）。
+
+验证（不重启真实 Explorer，直接给宿主窗口发 `RegisterWindowMessage("TaskbarCreated")`）：日志出现
+`收到 TaskbarCreated（资源管理器重启）` 与 `资源管理器重启后已重新隐藏桌面图标`，随后收起面板、桌面图标恢复可见，
+进程正常退出。`--self-test` 仍为 `failures=0`。

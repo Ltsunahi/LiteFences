@@ -43,6 +43,8 @@ const TIMER_TRAY_RETRY: usize = 2;
 const TIMER_DEMO_RESTART: usize = 4;
 const TIMER_CAPTURE: usize = 5;
 const TIMER_CAPTURE_EARLY: usize = 6;
+/// 资源管理器重启后补做一次「隐藏桌面图标」。
+const TIMER_REHIDE: usize = 7;
 /// 后台图标扫描完成的自定义消息。
 const WM_APP_SCAN: u32 = WM_APP + 2;
 /// 托盘不可用时的兜底入口，也方便键盘用户。
@@ -159,6 +161,7 @@ pub fn run() -> std::process::ExitCode {
         pending_remove: None,
         drop_hover: None,
         drop_notice: None,
+        rehide_left: 0,
         remove_mode: false,
         hidden: icons::load_hidden(),
         hotkey: crate::settings::load_hotkey(),
@@ -808,11 +811,21 @@ unsafe extern "system" fn host_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // 资源管理器重启后托盘图标会丢失，需要重新添加。
+    // 资源管理器重启后托盘图标会丢失，需要重新添加；桌面视图句柄也换了。
     let taskbar_created = tray::taskbar_created_message();
     if taskbar_created != 0 && message == taskbar_created {
-        log::info("收到 TaskbarCreated，重新添加托盘图标");
+        log::info("收到 TaskbarCreated（资源管理器重启）：重建托盘、重扫桌面图标");
         state().tray_installed = tray::install(hwnd);
+        let app = state();
+        // 面板还开着时，Explorer 会把桌面图标重新显示出来。刚重启时 DefView 可能还没建好，
+        // 所以交给定时器重试几次，而不是当场只试一次。
+        if app.shown && app.icons_hidden {
+            app.rehide_left = 3;
+            // SAFETY: 宿主窗口有效；定时器到期后自己重试。
+            unsafe { SetTimer(hwnd, TIMER_REHIDE, 700, None) };
+        }
+        // 桌面上的图标集合可能变了（新增/删除/重排），重新扫描一遍。
+        begin_scan(hwnd);
         return 0;
     }
     match message {
@@ -869,6 +882,30 @@ unsafe extern "system" fn host_proc(
         }
         WM_APP_SCAN => {
             finish_scan();
+            0
+        }
+        WM_TIMER if wparam == TIMER_REHIDE => {
+            let app = state();
+            if !app.shown || !app.icons_hidden || app.rehide_left == 0 {
+                // SAFETY: 句柄有效；不再需要补做。
+                unsafe { KillTimer(hwnd, TIMER_REHIDE) };
+                return 0;
+            }
+            if desktop_icons::set_visible(false) {
+                app.rehide_left = 0;
+                log::info("资源管理器重启后已重新隐藏桌面图标");
+                // SAFETY: 句柄有效；任务完成。
+                unsafe { KillTimer(hwnd, TIMER_REHIDE) };
+            } else if app.rehide_left > 1 {
+                app.rehide_left -= 1;
+                log::warn(&format!("桌面图标还没藏住，稍后重试（还剩 {} 次）", app.rehide_left));
+            } else {
+                app.rehide_left = 0;
+                app.icons_hidden = false;
+                log::error("资源管理器重启后没能重新隐藏桌面图标，放弃并等待下次唤出");
+                // SAFETY: 句柄有效。
+                unsafe { KillTimer(hwnd, TIMER_REHIDE) };
+            }
             0
         }
         WM_TIMER if wparam == TIMER_CAPTURE_EARLY => {
