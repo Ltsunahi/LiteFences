@@ -1823,13 +1823,71 @@ fn draw_scroll_indicator(hdc: HDC, app: &crate::state::App) {
     }
 }
 
-/// 拖动标题时画一条插入位置指示线。
+/// 拖动标题时的插入位置提示：中间一段短胶囊 + 两端小圆点，压在暗色光晕上。
+///
+/// 早先是整行 4px 实心亮条，太抢眼；改成居中短胶囊后只提示“落在这里”，观感更轻。
 fn draw_header_indicator(hdc: HDC, app: &crate::state::App, target: usize) {
+    // 插在原来的位置（自己前面或自己后面）不会改变顺序，就别画了。
+    if let Some(drag) = app.header_drag
+        && (target == drag.from || target == drag.from + 1)
+    {
+        return;
+    }
     let rect = header_indicator_rect(app, target);
-    // SAFETY: 画刷用完即释放；字体已由 paint 选好。
+    let scale = app.layout.scale;
+    let y = (rect.top + rect.bottom) / 2;
+    let width = ((220.0 * scale) as i32).max(120);
+    let center = app.layout.width / 2;
+    let half = width / 2;
+    let thickness = ((3.0 * scale) as i32).max(2);
+    let radius = ((4.0 * scale) as i32).max(3);
+    // COLORREF 是 0x00BBGGRR：#6FA8FF 的强调色 + 深蓝灰光晕。
+    let accent = 0x00FF_A86Fu32;
+    let halo = 0x0055_3A1Fu32;
+    // SAFETY: 画刷与画笔用完即释放；字体已由 paint 选好。
     unsafe {
-        let brush = CreateSolidBrush(0x0080_D0FF);
-        FillRect(hdc, &rect, brush);
+        let null_pen = GetStockObject(NULL_PEN);
+        // 光晕：比主线略大一圈的暗色，模拟柔和边缘。
+        let shadow = CreateSolidBrush(halo);
+        let old_brush = SelectObject(hdc, shadow as _);
+        let old_pen = SelectObject(hdc, null_pen);
+        RoundRect(
+            hdc,
+            center - half - radius,
+            y - thickness / 2 - radius / 2,
+            center + half + radius,
+            y + thickness / 2 + radius / 2,
+            thickness + radius,
+            thickness + radius,
+        );
+        SelectObject(hdc, old_brush);
+        SelectObject(hdc, old_pen);
+        DeleteObject(shadow as _);
+        // 主线。
+        let brush = CreateSolidBrush(accent);
+        let old_brush = SelectObject(hdc, brush as _);
+        let old_pen = SelectObject(hdc, null_pen);
+        RoundRect(
+            hdc,
+            center - half,
+            y - thickness / 2,
+            center + half,
+            y + thickness / 2,
+            thickness,
+            thickness,
+        );
+        // 两端圆点。
+        for edge in [center - half, center + half] {
+            Ellipse(
+                hdc,
+                edge - radius,
+                y - radius,
+                edge + radius,
+                y + radius,
+            );
+        }
+        SelectObject(hdc, old_brush);
+        SelectObject(hdc, old_pen);
         DeleteObject(brush as _);
     }
 }
