@@ -57,7 +57,7 @@ const TIMER_DROP_NOTICE: usize = 3;
 /// 唤出后忽略点击的时间窗口，单位毫秒。
 const SHOW_COOLDOWN_MS: u64 = 350;
 /// 入场动画时长；帧间隔略大一点，减少分层窗口的合成次数。
-const ANIM_MS: u64 = 220;
+const ANIM_MS: u64 = 240;
 /// 亚克力最终不透明度。
 const TINT_ALPHA: u32 = 0x99;
 
@@ -1303,9 +1303,11 @@ fn paint(hwnd: HWND) {
                 app.static_dirty = false;
             }
             if app.anim_started.is_some() {
-                // 入场动画：整帧按当前不透明度叠加到桌面上，淡入（不位移，避免边缘穿帮）。
+                // 入场动画：从 96% 缩放到 100% + 淡入。缩放时四周会露出一点真实桌面，
+                // 正好当作“面板铺开”的观感；不用分层窗口，文字不会丢。
                 let progress = anim_progress();
                 let alpha = (progress * 255.0).clamp(0.0, 255.0) as u8;
+                let inset = ((1.0 - progress) * (24.0 * app.layout.scale)).round() as i32;
                 let blend = BLENDFUNCTION {
                     BlendOp: AC_SRC_OVER as u8,
                     BlendFlags: 0,
@@ -1314,7 +1316,17 @@ fn paint(hwnd: HWND) {
                 };
                 // SAFETY: 两个 DC 有效；源是整屏 32 位 DIB，目标 DC 来自 BeginPaint。
                 AlphaBlend(
-                    hdc, 0, 0, width, height, cache, 0, 0, width, height, blend,
+                    hdc,
+                    inset,
+                    inset,
+                    width - inset * 2,
+                    height - inset * 2,
+                    cache,
+                    0,
+                    0,
+                    width,
+                    height,
+                    blend,
                 );
             } else if redrawn {
                 // 内容刚重画过：必须整屏贴一次，否则窗口上会“一半新一半旧”。
