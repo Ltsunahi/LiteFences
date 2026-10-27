@@ -277,3 +277,24 @@ final_alive=False (关闭后应为 False)  → PASS
   子目录与 6 个文件按「文件夹在前」排列（截图 `portal-panel.png`）；
 - `groups.txt` 仍只有 `[其它]`，没有入口组；`layout.txt` 没有入口项；`portals.txt` 原样保留；
 - 吸顶：12 组滚动 5 格后，顶部固定显示 `组2 (7)`，其余内容从下方滚过（`scroll-after.png`）。
+
+## 2026-10-27（第二轮）：文件夹入口支持排序
+
+右键入口标题 → 菜单里多了三项（当前项打勾）：
+
+| 排序 | 规则 |
+| --- | --- |
+| 文件夹在前，再按名称（默认） | 目录优先，同类按名称大小写不敏感 |
+| 按名称 | 不分类别，全部按名称 |
+| 按修改时间 | 新的在前，同一时间再按名称 |
+
+排序方式存进 `portals.txt` 的第 4 列（`folder` / `name` / `time`），留空按默认；
+改排序会立刻重扫该目录并重排，且算进入口的版本号（不会因为缓存而不生效）。
+
+验证：
+
+- 单测 `portals::tests::{folder_first_puts_directories_ahead, name_mode_ignores_kind_and_case,
+  time_mode_puts_newest_first, sort_mode_round_trips}`；
+- 实机：fixture 目录里把 `文档1..6` 的修改时间设成递增，`portals.txt` 写 `sort=time` 后，
+  面板显示 `文档6,5,4,3,2,1` 再 `子目录A`（与默认的「文件夹在前 + 名称」顺序相反），
+  截图 `artifacts/portal-sort-time-2026-10-27.png`。

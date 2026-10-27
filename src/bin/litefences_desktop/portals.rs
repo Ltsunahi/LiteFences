@@ -3,9 +3,10 @@
 //! 入口是**只读视图**：项不能拖动、改名、换图标，也不接收外部拖入；
 //! 「删除分组」只是移除这个入口，不会动目录里的文件。
 //!
-//! 数据文件 `portals.txt`：每行「目录<TAB>显示名[<TAB>collapsed]」。
+//! 数据文件 `portals.txt`：每行「目录<TAB>显示名[<TAB>collapsed[<TAB>sort]]」，
+//! sort 取值 `folder`（默认，文件夹在前再按名称）/ `name` / `time`。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::icons::{DesktopItem, ItemSource};
 use crate::log;
@@ -13,10 +14,49 @@ use crate::log;
 /// 单个入口最多显示的项数，避免超大目录拖慢唤出。
 const MAX_ITEMS: usize = 200;
 
+/// 入口内容的排序方式。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SortMode {
+    /// 文件夹在前，各自按名称（默认）。
+    FolderFirst,
+    /// 不分类别，全部按名称。
+    Name,
+    /// 按修改时间，新的在前。
+    Time,
+}
+
+impl SortMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "" | "folder" | "folder-first" => Some(Self::FolderFirst),
+            "name" => Some(Self::Name),
+            "time" | "modified" => Some(Self::Time),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FolderFirst => "folder",
+            Self::Name => "name",
+            Self::Time => "time",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FolderFirst => "文件夹在前，再按名称",
+            Self::Name => "按名称",
+            Self::Time => "按修改时间（新的在前）",
+        }
+    }
+}
+
 pub struct FolderPortal {
     pub dir: PathBuf,
     pub name: String,
     pub collapsed: bool,
+    pub sort: SortMode,
 }
 
 fn file_path() -> PathBuf {
@@ -33,7 +73,7 @@ pub fn load() -> Vec<FolderPortal> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let mut parts = line.splitn(3, '\t');
+        let mut parts = line.splitn(4, '\t');
         let Some(dir) = parts.next() else {
             continue;
         };
@@ -54,10 +94,15 @@ pub fn load() -> Vec<FolderPortal> {
                     .unwrap_or_else(|| dir_path.display().to_string())
             });
         let collapsed = parts.next().is_some_and(|value| value.trim() == "1");
+        let sort = parts
+            .next()
+            .and_then(SortMode::parse)
+            .unwrap_or(SortMode::FolderFirst);
         portals.push(FolderPortal {
             dir: dir_path,
             name,
             collapsed,
+            sort,
         });
     }
     portals
@@ -69,14 +114,16 @@ pub fn save(portals: &[FolderPortal]) {
         let _ = std::fs::create_dir_all(parent);
     }
     let mut text = String::from(
-        "# LiteFences 文件夹入口 v1：每行「目录<TAB>显示名[<TAB>collapsed]」，只读视图\n",
+        "# LiteFences 文件夹入口 v1：每行「目录<TAB>显示名<TAB>collapsed<TAB>sort」\n\
+         # sort：folder（文件夹在前，默认）/ name / time\n",
     );
     for portal in portals {
         text.push_str(&format!(
-            "{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\n",
             portal.dir.display(),
             portal.name,
-            if portal.collapsed { 1 } else { 0 }
+            if portal.collapsed { 1 } else { 0 },
+            portal.sort.as_str()
         ));
     }
     if let Err(error) = std::fs::write(&path, text) {
@@ -84,20 +131,48 @@ pub fn save(portals: &[FolderPortal]) {
     }
 }
 
+/// 目录里的一项，排序用。
+struct Entry {
+    is_dir: bool,
+    /// 小写名字，用于大小写不敏感比较。
+    lower: String,
+    /// Unix 秒；取不到时为 0。
+    modified: u64,
+    path: PathBuf,
+}
+
+fn sort_entries(entries: &mut [Entry], mode: SortMode) {
+    match mode {
+        SortMode::FolderFirst => entries.sort_by(|left, right| {
+            right
+                .is_dir
+                .cmp(&left.is_dir)
+                .then_with(|| left.lower.cmp(&right.lower))
+        }),
+        SortMode::Name => entries.sort_by(|left, right| left.lower.cmp(&right.lower)),
+        SortMode::Time => entries.sort_by(|left, right| {
+            right
+                .modified
+                .cmp(&left.modified)
+                .then_with(|| left.lower.cmp(&right.lower))
+        }),
+    }
+}
+
 /// 读目录的一层内容并生成面板项（图标句柄由调用方负责销毁）。
-pub fn scan(dir: &Path) -> Vec<DesktopItem> {
+pub fn scan(portal: &FolderPortal) -> Vec<DesktopItem> {
     use std::os::windows::fs::MetadataExt;
     const HIDDEN: u32 = 0x2;
     const SYSTEM: u32 = 0x4;
-    let mut found: Vec<(bool, PathBuf)> = Vec::new();
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
+    let mut entries: Vec<Entry> = Vec::new();
+    let read = match std::fs::read_dir(&portal.dir) {
+        Ok(read) => read,
         Err(error) => {
-            log::warn(&format!("入口目录不可读 {}：{error}", dir.display()));
+            log::warn(&format!("入口目录不可读 {}：{error}", portal.dir.display()));
             return Vec::new();
         }
     };
-    for entry in entries.flatten() {
+    for entry in read.flatten() {
         let path = entry.path();
         let name = path
             .file_name()
@@ -112,30 +187,90 @@ pub fn scan(dir: &Path) -> Vec<DesktopItem> {
         if meta.file_attributes() & (HIDDEN | SYSTEM) != 0 {
             continue;
         }
-        found.push((meta.is_dir(), path));
-        if found.len() >= MAX_ITEMS {
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0);
+        entries.push(Entry {
+            is_dir: meta.is_dir(),
+            lower: name.to_lowercase(),
+            modified,
+            path,
+        });
+        if entries.len() >= MAX_ITEMS {
             break;
         }
     }
-    found.sort_by(|left, right| {
-        right.0.cmp(&left.0).then_with(|| {
-            left.1
-                .file_name()
-                .map(|name| name.to_string_lossy().to_lowercase())
-                .cmp(
-                    &right
-                        .1
-                        .file_name()
-                        .map(|name| name.to_string_lossy().to_lowercase()),
-                )
-        })
-    });
-    found
+    sort_entries(&mut entries, portal.sort);
+    entries
         .into_iter()
-        .map(|(_, path)| {
-            let mut item = crate::icons::make_custom_item(path);
+        .map(|entry| {
+            let mut item = crate::icons::make_custom_item(entry.path);
             item.source = ItemSource::Portal;
             item
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(name: &str, is_dir: bool, modified: u64) -> Entry {
+        Entry {
+            is_dir,
+            lower: name.to_lowercase(),
+            modified,
+            path: PathBuf::from(name),
+        }
+    }
+
+    fn names(entries: &[Entry]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|entry| entry.path.to_string_lossy().to_string())
+            .collect()
+    }
+
+    fn scene() -> Vec<Entry> {
+        vec![
+            entry("b.txt", false, 10),
+            entry("A文件夹", true, 5),
+            entry("a.txt", false, 30),
+            entry("Z文件夹", true, 20),
+        ]
+    }
+
+    #[test]
+    fn folder_first_puts_directories_ahead() {
+        let mut entries = scene();
+        sort_entries(&mut entries, SortMode::FolderFirst);
+        assert_eq!(names(&entries), ["A文件夹", "Z文件夹", "a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn name_mode_ignores_kind_and_case() {
+        let mut entries = scene();
+        sort_entries(&mut entries, SortMode::Name);
+        // "a.txt" < "a文件夹" < "b.txt" < "z文件夹"（点号 < 汉字 < b < z）
+        assert_eq!(names(&entries), ["a.txt", "A文件夹", "b.txt", "Z文件夹"]);
+    }
+
+    #[test]
+    fn time_mode_puts_newest_first() {
+        let mut entries = scene();
+        sort_entries(&mut entries, SortMode::Time);
+        assert_eq!(names(&entries), ["a.txt", "Z文件夹", "b.txt", "A文件夹"]);
+    }
+
+    #[test]
+    fn sort_mode_round_trips() {
+        for mode in [SortMode::FolderFirst, SortMode::Name, SortMode::Time] {
+            assert_eq!(SortMode::parse(mode.as_str()), Some(mode));
+        }
+        assert_eq!(SortMode::parse(""), Some(SortMode::FolderFirst));
+        assert_eq!(SortMode::parse("bogus"), None);
+    }
 }

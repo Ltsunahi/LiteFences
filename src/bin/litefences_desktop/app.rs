@@ -312,6 +312,9 @@ fn portal_stamp(app: &App) -> u64 {
             mix(&mut hash, u64::from(byte));
         }
         mix(&mut hash, u64::from(portal.collapsed));
+        for byte in portal.sort.as_str().bytes() {
+            mix(&mut hash, u64::from(byte));
+        }
         let modified = std::fs::metadata(&portal.dir)
             .and_then(|meta| meta.modified())
             .ok()
@@ -356,7 +359,7 @@ pub fn rebuild_portal_items() {
     }
     app.groups.retain(|group| group.portal.is_none());
     for (index, portal) in app.portals.iter().enumerate() {
-        let items = crate::portals::scan(&portal.dir);
+        let items = crate::portals::scan(portal);
         let mut group = crate::groups::Group::new(format!("入口：{}", portal.name));
         group.collapsed = portal.collapsed;
         group.portal = Some(index);
@@ -365,6 +368,26 @@ pub fn rebuild_portal_items() {
         app.items.extend(items);
     }
     app.portal_stamp = Some(portal_stamp(app));
+}
+
+/// 改某个入口分组的排序方式，立刻重扫并重排。
+pub fn set_portal_sort(group_index: usize, mode: crate::portals::SortMode) {
+    let app = state();
+    let Some(portal_index) = app.groups.get(group_index).and_then(|group| group.portal) else {
+        return;
+    };
+    let Some(portal) = app.portals.get_mut(portal_index) else {
+        return;
+    };
+    if portal.sort == mode {
+        return;
+    }
+    portal.sort = mode;
+    let name = portal.name.clone();
+    crate::portals::save(&app.portals);
+    log::info(&format!("入口「{name}」排序改为 {}", mode.label()));
+    rebuild_portal_items();
+    overlay::relayout();
 }
 
 /// 托盘/设置菜单：选一个目录，加为面板里的只读入口。
@@ -389,6 +412,7 @@ pub fn add_portal_from_picker() {
         dir,
         name,
         collapsed: false,
+        sort: crate::portals::SortMode::FolderFirst,
     });
     crate::portals::save(&app.portals);
     rebuild_portal_items();

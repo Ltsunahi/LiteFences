@@ -697,11 +697,37 @@ fn open_header_menu(group_index: usize) {
         if menu.is_null() {
             return;
         }
+        let portal_sort = group.portal.and_then(|index| app.portals.get(index)).map(|portal| portal.sort);
         let rename = wide("重命名分组…");
         let toggle = wide(if collapsed { "展开该组" } else { "折叠该组" });
-        let delete = wide("删除分组（图标回到「其它」）");
+        let delete = wide(if portal_sort.is_some() {
+            "移除入口（目录内容不动）"
+        } else {
+            "删除分组（图标回到「其它」）"
+        });
         AppendMenuW(menu, MF_STRING, 10, rename.as_ptr());
         AppendMenuW(menu, MF_STRING, 11, toggle.as_ptr());
+        // 入口分组多一份排序方式，当前项打勾。
+        if let Some(current) = portal_sort {
+            AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+            let modes = [
+                (20, crate::portals::SortMode::FolderFirst),
+                (21, crate::portals::SortMode::Name),
+                (22, crate::portals::SortMode::Time),
+            ];
+            let labels: Vec<_> = modes
+                .iter()
+                .map(|(_, mode)| wide(&format!("排序：{}", mode.label())))
+                .collect();
+            for ((id, mode), label) in modes.iter().zip(labels.iter()) {
+                let flags = if current == *mode {
+                    MF_STRING | MF_CHECKED
+                } else {
+                    MF_STRING
+                };
+                AppendMenuW(menu, flags, *id, label.as_ptr());
+            }
+        }
         if !is_default {
             AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
             AppendMenuW(menu, MF_STRING, 12, delete.as_ptr());
@@ -741,6 +767,9 @@ fn open_header_menu(group_index: usize) {
             10 => rename_group(group_index),
             11 => toggle_group(group_index),
             12 => delete_group(group_index),
+            20 => crate::app::set_portal_sort(group_index, crate::portals::SortMode::FolderFirst),
+            21 => crate::app::set_portal_sort(group_index, crate::portals::SortMode::Name),
+            22 => crate::app::set_portal_sort(group_index, crate::portals::SortMode::Time),
             _ => {}
         }
     }
