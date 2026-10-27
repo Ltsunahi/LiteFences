@@ -1823,9 +1823,7 @@ fn draw_scroll_indicator(hdc: HDC, app: &crate::state::App) {
     }
 }
 
-/// 拖动标题时的插入位置提示：中间一段短胶囊 + 两端小圆点，压在暗色光晕上。
-///
-/// 早先是整行 4px 实心亮条，太抢眼；改成居中短胶囊后只提示“落在这里”，观感更轻。
+/// 拖动标题时的插入位置提示：整条细线，中间略亮、两端略暗，避免一整条死板的亮条。
 fn draw_header_indicator(hdc: HDC, app: &crate::state::App, target: usize) {
     // 插在原来的位置（自己前面或自己后面）不会改变顺序，就别画了。
     if let Some(drag) = app.header_drag
@@ -1836,59 +1834,46 @@ fn draw_header_indicator(hdc: HDC, app: &crate::state::App, target: usize) {
     let rect = header_indicator_rect(app, target);
     let scale = app.layout.scale;
     let y = (rect.top + rect.bottom) / 2;
-    let width = ((220.0 * scale) as i32).max(120);
-    let center = app.layout.width / 2;
-    let half = width / 2;
-    let thickness = ((3.0 * scale) as i32).max(2);
-    let radius = ((4.0 * scale) as i32).max(3);
-    // COLORREF 是 0x00BBGGRR：#6FA8FF 的强调色 + 深蓝灰光晕。
-    let accent = 0x00FF_A86Fu32;
-    let halo = 0x0055_3A1Fu32;
-    // SAFETY: 画刷与画笔用完即释放；字体已由 paint 选好。
+    let inset = (18.0 * scale) as i32;
+    let left = inset;
+    let right = app.layout.width - inset;
+    let thickness = ((3.0 * scale) as i32).max(3);
+    let top = y - thickness / 2;
+    let bottom = top + thickness;
+    if right <= left {
+        return;
+    }
+    // 96 段线性渐变：中间 #7FB4FF，两端 #4A6B92（不会暗到看不见，保持是一条连续的线）。
+    const SEGMENTS: i32 = 96;
+    let span = (right - left).max(1);
+    // SAFETY: 每段画刷单独创建、画完即释放；字体已由 paint 选好。
     unsafe {
-        let null_pen = GetStockObject(NULL_PEN);
-        // 光晕：比主线略大一圈的暗色，模拟柔和边缘。
-        let shadow = CreateSolidBrush(halo);
-        let old_brush = SelectObject(hdc, shadow as _);
-        let old_pen = SelectObject(hdc, null_pen);
-        RoundRect(
-            hdc,
-            center - half - radius,
-            y - thickness / 2 - radius / 2,
-            center + half + radius,
-            y + thickness / 2 + radius / 2,
-            thickness + radius,
-            thickness + radius,
-        );
-        SelectObject(hdc, old_brush);
-        SelectObject(hdc, old_pen);
-        DeleteObject(shadow as _);
-        // 主线。
-        let brush = CreateSolidBrush(accent);
-        let old_brush = SelectObject(hdc, brush as _);
-        let old_pen = SelectObject(hdc, null_pen);
-        RoundRect(
-            hdc,
-            center - half,
-            y - thickness / 2,
-            center + half,
-            y + thickness / 2,
-            thickness,
-            thickness,
-        );
-        // 两端圆点。
-        for edge in [center - half, center + half] {
-            Ellipse(
-                hdc,
-                edge - radius,
-                y - radius,
-                edge + radius,
-                y + radius,
-            );
+        for index in 0..SEGMENTS {
+            let start = left + span * index / SEGMENTS;
+            let end = left + span * (index + 1) / SEGMENTS;
+            if end <= start {
+                continue;
+            }
+            let t = (index as f32 + 0.5) / SEGMENTS as f32;
+            // 0 = 两端，1 = 中间。
+            let centered = 1.0 - (2.0 * t - 1.0).abs();
+            let mix = centered.powf(0.55);
+            let blend = |from: f32, to: f32| (from + (to - from) * mix) as u32;
+            let r = blend(94.0, 166.0);
+            let g = blend(134.0, 204.0);
+            let b = blend(184.0, 255.0);
+            // COLORREF 是 0x00BBGGRR。
+            let color = (b << 16) | (g << 8) | r;
+            let brush = CreateSolidBrush(color);
+            let piece = RECT {
+                left: start,
+                top,
+                right: end,
+                bottom,
+            };
+            FillRect(hdc, &piece, brush);
+            DeleteObject(brush as _);
         }
-        SelectObject(hdc, old_brush);
-        SelectObject(hdc, old_pen);
-        DeleteObject(brush as _);
     }
 }
 
@@ -2686,15 +2671,19 @@ unsafe extern "system" fn overlay_proc(
                             header.target = Some(header.from);
                         }
                         let target = header_insert_target(app, y);
-                        if header.target != Some(target) {
-                            header.target = Some(target);
+                        let changed = header.target != Some(target);
+                        header.target = Some(target);
+                        // 先把新状态写回全局，再重绘——paint 读的是 App 里的副本，
+                        // 顺序反了就会一直画上一次的位置（表现为“指示线不出现”）。
+                        app.header_drag = Some(header);
+                        if changed {
+                            log::info(&format!("标题拖动：插入位置 {target}"));
                             // SAFETY: 句柄有效；整屏重贴缓存再画指示线。
                             unsafe {
                                 InvalidateRect(hwnd, std::ptr::null(), 0);
                                 UpdateWindow(hwnd);
                             }
                         }
-                        app.header_drag = Some(header);
                     }
                 }
                 return 0;
