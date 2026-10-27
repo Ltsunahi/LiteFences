@@ -157,6 +157,7 @@ pub fn run() -> std::process::ExitCode {
         custom: icons::load_custom(),
         layout_order: icons::load_order(),
         drag: None,
+        header_drag: None,
         drag_hidden: None,
         pending_remove: None,
         drop_hover: None,

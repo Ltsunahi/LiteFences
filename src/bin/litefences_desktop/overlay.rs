@@ -486,6 +486,7 @@ pub fn hide_panel() {
     app.hover = None;
     app.anim_started = None;
     app.drag = None;
+    app.header_drag = None;
     app.drag_hidden = None;
     app.pending_remove = None;
     app.drop_hover = None;
@@ -552,15 +553,92 @@ pub fn relayout() {
     }
 }
 
-/// 标题行上只有左侧「箭头 + 组名」这一块可点，避免误触折叠。
-fn collapse_hit_rect(header: &Header) -> RECT {
-    let height = header.rect.bottom - header.rect.top;
-    RECT {
-        left: header.rect.left,
-        top: header.rect.top,
-        right: header.rect.left + height * 6,
-        bottom: header.rect.bottom,
+/// 鼠标（客户区坐标）落在哪一条分组标题上：吸顶那条优先，否则按内容坐标找整行。
+fn header_at(x: i32, y: i32) -> Option<usize> {
+    let app = state();
+    let point = POINT { x, y };
+    if let Some((group, rect)) = sticky_header(app)
+        // SAFETY: 矩形来自本模块布局。
+        && unsafe { PtInRect(&rect, point) != 0 }
+    {
+        return Some(group);
     }
+    let content = content_point(app, x, y);
+    app.layout
+        .headers
+        .iter()
+        // SAFETY: 同上。
+        .find(|header| unsafe { PtInRect(&header.rect, content) != 0 })
+        .map(|header| header.group)
+}
+
+/// 拖动标题时应该插到第几个位置（0..=普通分组数，入口组固定在最后）。
+fn header_insert_target(app: &crate::state::App, y: i32) -> usize {
+    let limit = app
+        .groups
+        .iter()
+        .position(|group| group.portal.is_some())
+        .unwrap_or(app.layout.headers.len());
+    let content_y = y + app.scroll;
+    for (index, header) in app.layout.headers.iter().enumerate() {
+        if index >= limit {
+            break;
+        }
+        let middle = header.rect.top + (header.rect.bottom - header.rect.top) / 2;
+        if content_y < middle {
+            return index;
+        }
+    }
+    limit
+}
+
+/// 拖动标题时的插入位置指示线（客户区坐标）。
+fn header_indicator_rect(app: &crate::state::App, target: usize) -> RECT {
+    let y = app
+        .layout
+        .headers
+        .get(target)
+        .map(|header| header.rect.top)
+        .or_else(|| app.layout.headers.last().map(|header| header.rect.bottom))
+        .unwrap_or(app.layout.content_height);
+    let y = (y - app.scroll).max(content_top(app));
+    let inset = (18.0 * app.layout.scale) as i32;
+    RECT {
+        left: inset,
+        top: y - 2,
+        right: app.layout.width - inset,
+        bottom: y + 2,
+    }
+}
+
+/// 把分组 `from` 移到插入位置 `to`（0..=普通分组数），并持久化。
+fn move_group(from: usize, to: usize) {
+    let app = state();
+    if from >= app.groups.len() {
+        return;
+    }
+    let limit = app
+        .groups
+        .iter()
+        .position(|group| group.portal.is_some())
+        .unwrap_or(app.groups.len());
+    let mut target = to.min(limit);
+    if target > from {
+        target -= 1;
+    }
+    if target == from || target >= app.groups.len() {
+        return;
+    }
+    let name = app.groups[from].name.clone();
+    let group = app.groups.remove(from);
+    app.groups.insert(target, group);
+    crate::groups::save(&app.groups);
+    log::info(&format!(
+        "调整分组顺序：「{name}」第 {} 位 → 第 {} 位",
+        from + 1,
+        target + 1
+    ));
+    relayout();
 }
 
 /// 工具条上的「新建分组」：输入名字后建立一个空组。
@@ -1260,6 +1338,12 @@ fn paint(hwnd: HWND) {
         draw_search_box(hdc, app, &full);
         draw_drop_hover(hdc, app);
         draw_scroll_indicator(hdc, app);
+        if let Some(header) = app.header_drag
+            && header.active
+            && let Some(target) = header.target
+        {
+            draw_header_indicator(hdc, app, target);
+        }
         if app.drag.is_some_and(|drag| drag.active) {
             draw_drag(hdc, app, &full);
         }
@@ -1735,6 +1819,17 @@ fn draw_scroll_indicator(hdc: HDC, app: &crate::state::App) {
         };
         let brush = CreateSolidBrush(0x0090_9090);
         FillRect(hdc, &thumb, brush);
+        DeleteObject(brush as _);
+    }
+}
+
+/// 拖动标题时画一条插入位置指示线。
+fn draw_header_indicator(hdc: HDC, app: &crate::state::App, target: usize) {
+    let rect = header_indicator_rect(app, target);
+    // SAFETY: 画刷用完即释放；字体已由 paint 选好。
+    unsafe {
+        let brush = CreateSolidBrush(0x0080_D0FF);
+        FillRect(hdc, &rect, brush);
         DeleteObject(brush as _);
     }
 }
@@ -2518,6 +2613,34 @@ unsafe extern "system" fn overlay_proc(
         }
         WM_MOUSEMOVE => {
             let app = state();
+            // 拖着分组标题走：算插入位置并画指示线（整屏重贴缓存，拖标题不频繁）。
+            if let Some(mut header) = app.header_drag {
+                let (x, y) = mouse_xy(lparam);
+                let moved = (x - header.start.0).abs() > 4 || (y - header.start.1).abs() > 4;
+                if moved {
+                    let is_portal = app
+                        .groups
+                        .get(header.from)
+                        .is_some_and(|group| group.portal.is_some());
+                    if !is_portal {
+                        if !header.active {
+                            header.active = true;
+                            header.target = Some(header.from);
+                        }
+                        let target = header_insert_target(app, y);
+                        if header.target != Some(target) {
+                            header.target = Some(target);
+                            // SAFETY: 句柄有效；整屏重贴缓存再画指示线。
+                            unsafe {
+                                InvalidateRect(hwnd, std::ptr::null(), 0);
+                                UpdateWindow(hwnd);
+                            }
+                        }
+                        app.header_drag = Some(header);
+                    }
+                }
+                return 0;
+            }
             if let Some(mut drag) = app.drag {
                 let previous_point = drag.current;
                 drag.current = mouse_xy(lparam);
@@ -2634,6 +2757,21 @@ unsafe extern "system" fn overlay_proc(
             let (x, y) = mouse_xy(lparam);
             let target = hit_test(x, y);
             let app = state();
+            // 松手结束标题拖动：拖过就是调顺序，没拖就是单击折叠/展开。
+            if let Some(header) = app.header_drag.take() {
+                // SAFETY: 捕获由本窗口持有。
+                unsafe { ReleaseCapture() };
+                if header.active {
+                    if let Some(target) = header.target {
+                        move_group(header.from, target);
+                    }
+                    // SAFETY: 句柄有效；清掉指示线。
+                    unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
+                } else {
+                    toggle_group(header.from);
+                }
+                return 0;
+            }
             if let Some(drag) = app.drag.take() {
                 // SAFETY: 捕获由本窗口持有。
                 unsafe { ReleaseCapture() };
@@ -2758,33 +2896,19 @@ unsafe extern "system" fn overlay_proc(
                     toggle_search();
                     return 0;
                 }
-                // 吸顶标题：位置被固定到内容区顶，点击直接按它算（不要换算回内容坐标）。
-                if let Some((group, rect)) = sticky_header(state()) {
-                    let pinned = collapse_hit_rect(&Header {
-                        group,
-                        rect,
-                        count: 0,
-                    });
-                    // SAFETY: 矩形来自本模块布局。
-                    if unsafe { PtInRect(&pinned, point) != 0 } {
-                        toggle_group(group);
-                        return 0;
-                    }
-                }
-                // 点分组标题行：折叠/展开。
-                {
+                // 整条分组标题都能点：按下先记录，松开没拖动就折叠/展开，拖过就是调顺序。
+                if let Some(group) = header_at(x, y) {
                     let app = state();
-                    let hit_point = content_point(app, x, y);
-                    let hit = app
-                        .layout
-                        .headers
-                        .iter()
-                        .find(|header| unsafe { PtInRect(&collapse_hit_rect(header), hit_point) != 0 })
-                        .map(|header| header.group);
-                    if let Some(group_index) = hit {
-                        toggle_group(group_index);
-                        return 0;
-                    }
+                    app.pending_remove = None;
+                    app.header_drag = Some(crate::state::HeaderDragState {
+                        from: group,
+                        start: (x, y),
+                        active: false,
+                        target: None,
+                    });
+                    // SAFETY: 捕获鼠标，拖出标题行也能收到消息。
+                    unsafe { SetCapture(hwnd) };
+                    return 0;
                 }
                 if state().remove_mode {
                     if let Some(index) = hit_test(x, y)

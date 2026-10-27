@@ -150,6 +150,18 @@ pub struct DragState {
     pub header_rect: Option<windows_sys::Win32::Foundation::RECT>,
 }
 
+/// 拖动分组标题调整顺序的中间状态。
+#[derive(Clone, Copy)]
+pub struct HeaderDragState {
+    /// 被拖的分组序号。
+    pub from: usize,
+    pub start: (i32, i32),
+    /// 超过阈值才算拖动，否则松开就是单击折叠。
+    pub active: bool,
+    /// 松手后会插入到的位置（0..=普通分组数）。
+    pub target: Option<usize>,
+}
+
 pub struct App {
     pub host: HWND,
     pub overlay: HWND,
@@ -170,6 +182,8 @@ pub struct App {
     pub layout_order: Vec<(std::path::PathBuf, String)>,
     /// 拖动排序状态。
     pub drag: Option<DragState>,
+    /// 拖动分组标题调整顺序。
+    pub header_drag: Option<HeaderDragState>,
     /// 拖动时暂时从静态帧里隐藏的项（让图标“浮起来”，避免重影）。
     pub drag_hidden: Option<usize>,
     /// 右键“待确认移除”的项与时间（面板内二次确认，不弹窗）。
