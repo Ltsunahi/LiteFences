@@ -11,6 +11,8 @@ pub struct Group {
     pub name: String,
     pub collapsed: bool,
     pub paths: Vec<PathBuf>,
+    /// 文件夹入口：值为 portals 里的序号；普通分组为 None。
+    pub portal: Option<usize>,
 }
 
 impl Group {
@@ -19,6 +21,7 @@ impl Group {
             name: name.into(),
             collapsed: false,
             paths: Vec::new(),
+            portal: None,
         }
     }
 }
@@ -54,6 +57,7 @@ pub fn load() -> Vec<Group> {
                     name,
                     collapsed,
                     paths: Vec::new(),
+                    portal: None,
                 });
             }
             continue;
@@ -73,6 +77,10 @@ pub fn save(groups: &[Group]) {
     }
     let mut text = String::from("# LiteFences 分组 v1：`[组名]` 开新组，`[!组名]` 表示默认折叠；组内每行一个路径\n");
     for group in groups {
+        // 入口是只读视图，不写进 groups.txt（它由 portals.txt 持久化）。
+        if group.portal.is_some() {
+            continue;
+        }
         if group.collapsed {
             text.push_str(&format!("[!{}]\n", group.name));
         } else {

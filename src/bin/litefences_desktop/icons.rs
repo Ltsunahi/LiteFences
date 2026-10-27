@@ -34,6 +34,8 @@ pub enum ItemSource {
     Desktop,
     /// 用户手动添加的。
     Custom,
+    /// 文件夹入口里的内容（只读视图，不写进 layout/custom 列表）。
+    Portal,
 }
 
 #[derive(Clone)]

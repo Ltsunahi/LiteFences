@@ -340,6 +340,8 @@ pub fn show_panel() {
         );
         GetWindowRect(app.overlay, &mut client);
     }
+    // 入口目录的内容在变化时重读（目录时间戳没变就复用上次结果）。
+    crate::app::refresh_portals_if_stale();
     // DPI 必须在窗口挪到目标显示器之后再取，多屏不同缩放时才对。
     let dpi = unsafe { GetDpiForWindow(app.overlay) };
     let (client_w, client_h) = (client.right - client.left, client.bottom - client.top);
@@ -583,7 +585,14 @@ fn toggle_group(index: usize) {
     };
     group.collapsed = !group.collapsed;
     let collapsed = group.collapsed;
+    let portal_index = group.portal;
     let name = group.name.clone();
+    if let Some(index) = portal_index {
+        if let Some(portal) = app.portals.get_mut(index) {
+            portal.collapsed = collapsed;
+        }
+        crate::portals::save(&app.portals);
+    }
     crate::groups::save(&app.groups);
     log::info(&format!("分组「{name}」{}", if collapsed { "折叠" } else { "展开" }));
     relayout();
@@ -595,6 +604,10 @@ fn open_group_menu(item_index: usize) {
     let Some(item) = app.items.get(item_index) else {
         return;
     };
+    if item.source == icons::ItemSource::Portal {
+        log::info("入口是只读视图：请右键入口标题管理（重命名/折叠/移除）");
+        return;
+    }
     let path = item.path.clone();
     let current = crate::groups::group_of(&app.groups, &path);
     // SAFETY: 菜单句柄在函数末尾释放；字符串在调用期间保持存活。
@@ -753,7 +766,14 @@ fn rename_group(index: usize) {
     let Some(group) = app.groups.get_mut(index) else {
         return;
     };
+    let portal_index = group.portal;
     group.name = name.clone();
+    if let Some(index) = portal_index {
+        if let Some(portal) = app.portals.get_mut(index) {
+            portal.name = name.clone();
+        }
+        crate::portals::save(&app.portals);
+    }
     crate::groups::save(&app.groups);
     log::info(&format!("分组改名：{current} → {name}"));
     relayout();
@@ -768,6 +788,17 @@ fn delete_group(index: usize) {
         return;
     }
     let name = group.name.clone();
+    if let Some(portal_index) = group.portal {
+        // 只读入口：只摘掉入口本身，不碰目录里的文件。
+        if portal_index < app.portals.len() {
+            app.portals.remove(portal_index);
+        }
+        crate::portals::save(&app.portals);
+        log::info(&format!("移除文件夹入口「{name}」（目录内容不动）"));
+        crate::app::rebuild_portal_items();
+        relayout();
+        return;
+    }
     app.groups.remove(index);
     crate::groups::save(&app.groups);
     log::info(&format!("删除分组「{name}」，图标回到其它"));
@@ -995,6 +1026,40 @@ fn max_scroll(app: &crate::state::App) -> i32 {
 /// 布局/DPI 变化后把滚动量夹回合法范围。
 fn clamp_scroll(app: &mut crate::state::App) {
     app.scroll = app.scroll.clamp(0, max_scroll(app));
+}
+
+/// 当前应该吸顶的分组：标题已经滚出顶部、但这一组的内容还在可见区里。
+fn sticky_group(app: &crate::state::App) -> Option<usize> {
+    let top = content_top(app) + app.scroll;
+    for (index, header) in app.layout.headers.iter().enumerate() {
+        let end = app
+            .layout
+            .headers
+            .get(index + 1)
+            .map(|next| next.rect.top)
+            .unwrap_or(app.layout.content_height);
+        if header.rect.top < top && end > top {
+            return Some(header.group);
+        }
+    }
+    None
+}
+
+/// 吸顶标题在客户区里的矩形（绘制与点击判定共用）。
+fn sticky_header(app: &crate::state::App) -> Option<(usize, RECT)> {
+    let group = sticky_group(app)?;
+    let header = app.layout.headers.iter().find(|header| header.group == group)?;
+    let height = header.rect.bottom - header.rect.top;
+    let top = content_top(app);
+    Some((
+        group,
+        RECT {
+            left: header.rect.left,
+            top,
+            right: header.rect.right,
+            bottom: top + height,
+        },
+    ))
 }
 
 /// 拖入时鼠标所在的组：按分组标题行划分纵向区域，标题下面到下一个标题都算该组。
@@ -1274,6 +1339,7 @@ fn render_static(hdc: HDC, app: &mut crate::state::App, width: i32, height: i32)
         IntersectClipRect(hdc, 0, content_top(app), width, height);
         draw_headers(hdc, app, &full);
         draw_items(hdc, app, &full);
+        draw_sticky_header(hdc, app);
         RestoreDC(hdc, saved);
         draw_hint(hdc, app, &full);
     }
@@ -1318,47 +1384,75 @@ fn ghost_rect(point: (i32, i32), icon: i32) -> RECT {
     }
 }
 
-/// 分组标题行：折叠箭头 + 组名 + 数量。
+/// 分组标题行：折叠箭头 + 组名 + 数量。滚动时，已经滚出顶部但内容还可见的那组吸顶。
 fn draw_headers(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     let scale = app.layout.scale;
+    let sticky = sticky_group(app);
     for header in &app.layout.headers {
+        if Some(header.group) == sticky {
+            // 这一组改成吸顶绘制，原位置那份跳过，免得重复。
+            continue;
+        }
         let rect = view_rect(app, header.rect);
         if !intersects(&rect, paint) {
             continue;
         }
-        let Some(group) = app.groups.get(header.group) else {
-            continue;
+        draw_one_header(hdc, app, header, rect, scale);
+    }
+}
+
+/// 吸顶标题单独画：必须压在图标之上，否则滚过去的图标会盖住它。
+fn draw_sticky_header(hdc: HDC, app: &crate::state::App) {
+    let Some(group) = sticky_group(app) else {
+        return;
+    };
+    let Some(header) = app.layout.headers.iter().find(|h| h.group == group) else {
+        return;
+    };
+    let scale = app.layout.scale;
+    let rect = sticky_header(app).map(|(_, rect)| rect).unwrap_or(header.rect);
+    // 吸顶条必须有底色，否则滚过去的图标会透到标题上。
+    unsafe {
+        let brush = CreateSolidBrush(0x0016_1616);
+        FillRect(hdc, &rect, brush);
+        DeleteObject(brush as _);
+    }
+    draw_one_header(hdc, app, header, rect, scale);
+}
+
+fn draw_one_header(hdc: HDC, app: &crate::state::App, header: &Header, rect: RECT, scale: f32) {
+    let Some(group) = app.groups.get(header.group) else {
+        return;
+    };
+    let count = header.count;
+    let arrow = if group.collapsed { "▶" } else { "▼" };
+    let text = wide(&format!("{arrow}  {}  ({count})", group.name));
+    // SAFETY: 画笔与底色用完即释放。
+    unsafe {
+        let line = RECT {
+            left: rect.left,
+            top: rect.bottom - 1,
+            right: rect.right,
+            bottom: rect.bottom,
         };
-        let count = header.count;
-        let arrow = if group.collapsed { "▶" } else { "▼" };
-        let text = wide(&format!("{arrow}  {}  ({count})", group.name));
-        // SAFETY: 画笔与底色用完即释放。
-        unsafe {
-            let line = RECT {
-                left: rect.left,
-                top: rect.bottom - 1,
-                right: rect.right,
-                bottom: rect.bottom,
-            };
-            let brush = CreateSolidBrush(0x0050_5050);
-            FillRect(hdc, &line, brush);
-            DeleteObject(brush as _);
-            let mut text_rect = RECT {
-                left: rect.left + (6.0 * scale) as i32,
-                top: rect.top,
-                right: rect.right,
-                bottom: rect.bottom,
-            };
-            SetBkMode(hdc, TRANSPARENT as i32);
-            SetTextColor(hdc, 0x00C8_C8C8);
-            DrawTextW(
-                hdc,
-                text.as_ptr(),
-                -1,
-                &mut text_rect,
-                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
-            );
-        }
+        let brush = CreateSolidBrush(0x0050_5050);
+        FillRect(hdc, &line, brush);
+        DeleteObject(brush as _);
+        let mut text_rect = RECT {
+            left: rect.left + (6.0 * scale) as i32,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        SetBkMode(hdc, TRANSPARENT as i32);
+        SetTextColor(hdc, 0x00C8_C8C8);
+        DrawTextW(
+            hdc,
+            text.as_ptr(),
+            -1,
+            &mut text_rect,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
     }
 }
 
@@ -2365,6 +2459,14 @@ unsafe extern "system" fn overlay_proc(
                 let moved_x = (drag.current.0 - drag.start.0).abs();
                 let moved_y = (drag.current.1 - drag.start.1).abs();
                 if !drag.active && (moved_x > 4 || moved_y > 4) {
+                    // 入口项是只读视图，不进入拖动（单击仍然可以打开）。
+                    if app
+                        .items
+                        .get(drag.from)
+                        .is_some_and(|item| item.source == crate::icons::ItemSource::Portal)
+                    {
+                        return 0;
+                    }
                     drag.active = true;
                     drag.last_paint = None;
                     drag.ghost = None;
@@ -2591,6 +2693,19 @@ unsafe extern "system" fn overlay_proc(
                     toggle_search();
                     return 0;
                 }
+                // 吸顶标题：位置被固定到内容区顶，点击直接按它算（不要换算回内容坐标）。
+                if let Some((group, rect)) = sticky_header(state()) {
+                    let pinned = collapse_hit_rect(&Header {
+                        group,
+                        rect,
+                        count: 0,
+                    });
+                    // SAFETY: 矩形来自本模块布局。
+                    if unsafe { PtInRect(&pinned, point) != 0 } {
+                        toggle_group(group);
+                        return 0;
+                    }
+                }
                 // 点分组标题行：折叠/展开。
                 {
                     let app = state();
@@ -2652,6 +2767,14 @@ unsafe extern "system" fn overlay_proc(
             if !within_cooldown() && !animating() {
                 let (x, y) = mouse_xy(lparam);
                 let point = POINT { x, y };
+                // 吸顶标题优先按它自己固定的位置判定。
+                if let Some((group, rect)) = sticky_header(state()) {
+                    // SAFETY: 矩形来自本模块布局。
+                    if unsafe { PtInRect(&rect, point) != 0 } {
+                        open_header_menu(group);
+                        return 0;
+                    }
+                }
                 let hovered_header = {
                     let app = state();
                     let content = content_point(app, point.x, point.y);

@@ -201,6 +201,10 @@ pub struct App {
     pub font_scale: f32,
     /// 分组（顺序即显示顺序）。
     pub groups: Vec<crate::groups::Group>,
+    /// 文件夹入口列表（持久化在 portals.txt）。
+    pub portals: Vec<crate::portals::FolderPortal>,
+    /// 上次重建入口内容时的目录版本号；没变化就不重扫（图标加载很慢）。
+    pub portal_stamp: Option<u64>,
     /// 双缓冲：内存 DC 与位图，避免整屏重绘时闪。
     pub buffer_dc: windows_sys::Win32::Graphics::Gdi::HDC,
     pub buffer_bitmap: isize,

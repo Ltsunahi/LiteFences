@@ -21,6 +21,7 @@ pub const MENU_EXIT: usize = 1003;
 pub const MENU_CAPTURE: usize = 1004;
 pub const MENU_AUTOSTART: usize = 1005;
 pub const MENU_HOTKEY: usize = 1006;
+pub const MENU_ADD_PORTAL: usize = 1007;
 
 /// Explorer 重启后会广播 `TaskbarCreated`，收到后必须重新添加托盘图标。
 pub fn taskbar_created_message() -> u32 {
@@ -114,6 +115,8 @@ pub fn show_menu(host: HWND, autostart_on: bool, hotkey_text: &str) -> usize {
         };
         AppendMenuW(menu, autostart_flags, MENU_AUTOSTART, autostart.as_ptr());
         AppendMenuW(menu, MF_STRING, MENU_HOTKEY, hotkey.as_ptr());
+        let add_portal = wide("添加文件夹入口…（只读展示目录内容）");
+        AppendMenuW(menu, MF_STRING, MENU_ADD_PORTAL, add_portal.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(menu, MF_STRING, MENU_CAPTURE, capture.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());

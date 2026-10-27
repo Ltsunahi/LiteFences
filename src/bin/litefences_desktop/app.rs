@@ -172,6 +172,8 @@ pub fn run() -> std::process::ExitCode {
         font: std::ptr::null_mut(),
         font_scale: 0.0,
         groups: crate::groups::load(),
+        portals: crate::portals::load(),
+        portal_stamp: None,
         buffer_dc: std::ptr::null_mut(),
         buffer_bitmap: 0,
         buffer_width: 0,
@@ -194,6 +196,7 @@ pub fn run() -> std::process::ExitCode {
     crate::groups::prune(&mut state().groups);
     crate::groups::ensure_default(&mut state().groups);
     crate::groups::save(&state().groups);
+    rebuild_portal_items();
     state().tray_installed = tray::install(host);
     if !state().tray_installed {
         // 托盘可能因为权限或资源管理器未就绪失败，稍后重试一次。
@@ -285,9 +288,110 @@ fn finish_scan() {
     icons::apply_order(&mut app.items, &app.layout_order);
     // 再套用用户指定的图标文件（layout.txt 第三列）。
     icons::apply_custom_icons(&mut app.items);
+    // 入口项在 replace 时被一并释放了，这里按目录重新建。
+    rebuild_portal_items();
     overlay::relayout();
     // 如果面板正开着，用新窗口重画一帧，避免旧图标留在画面上。
     overlay::reshow();
+}
+
+/// 重建「文件夹入口」的内容：清掉旧的入口项和入口分组，按 portals 重新扫一遍。
+///
+/// 入口内容 + 目录状态的版本号：目录改动或配置变化时才重扫（图标加载很慢）。
+fn portal_stamp(app: &App) -> u64 {
+    fn mix(hash: &mut u64, value: u64) {
+        *hash ^= value;
+        *hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for portal in &app.portals {
+        for byte in portal.dir.to_string_lossy().bytes() {
+            mix(&mut hash, u64::from(byte));
+        }
+        for byte in portal.name.bytes() {
+            mix(&mut hash, u64::from(byte));
+        }
+        mix(&mut hash, u64::from(portal.collapsed));
+        let modified = std::fs::metadata(&portal.dir)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or(0);
+        mix(&mut hash, modified);
+    }
+    hash ^ (app.portals.len() as u64)
+}
+
+/// 目录和配置都没变就跳过重建，避免每次唤出都重新取图标。
+pub fn refresh_portals_if_stale() {
+    let app = state();
+    let stamp = portal_stamp(app);
+    let intact = app.portals.is_empty()
+        || app
+            .items
+            .iter()
+            .any(|item| item.source == icons::ItemSource::Portal);
+    if app.portal_stamp == Some(stamp) && intact {
+        return;
+    }
+    rebuild_portal_items();
+}
+
+/// 在唤出面板、后台扫描完成、添加入口后调用。入口始终是最后一个分组。
+pub fn rebuild_portal_items() {
+    let app = state();
+    // 先释放旧入口项的图标句柄，再摘掉它们和用户分组。
+    let mut removed = Vec::new();
+    app.items.retain(|item| {
+        if item.source == icons::ItemSource::Portal {
+            removed.push(item.clone());
+            false
+        } else {
+            true
+        }
+    });
+    for item in removed {
+        icons::destroy_item(item);
+    }
+    app.groups.retain(|group| group.portal.is_none());
+    for (index, portal) in app.portals.iter().enumerate() {
+        let items = crate::portals::scan(&portal.dir);
+        let mut group = crate::groups::Group::new(format!("入口：{}", portal.name));
+        group.collapsed = portal.collapsed;
+        group.portal = Some(index);
+        group.paths = items.iter().map(|item| item.path.clone()).collect();
+        app.groups.push(group);
+        app.items.extend(items);
+    }
+    app.portal_stamp = Some(portal_stamp(app));
+}
+
+/// 托盘/设置菜单：选一个目录，加为面板里的只读入口。
+pub fn add_portal_from_picker() {
+    let app = state();
+    let host = app.host;
+    let Some(dir) = crate::picker::pick_folder(host) else {
+        return;
+    };
+    let app = state();
+    if app.portals.iter().any(|portal| icons::same_path(&portal.dir, &dir)) {
+        log::info("这个目录已经是入口了");
+        return;
+    }
+    let name = dir
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| dir.display().to_string());
+    log::info(&format!("添加文件夹入口：{}（{}）", dir.display(), name));
+    app.portals.push(crate::portals::FolderPortal {
+        dir,
+        name,
+        collapsed: false,
+    });
+    crate::portals::save(&app.portals);
+    rebuild_portal_items();
+    overlay::relayout();
 }
 
 /// 把手动添加的图标接在桌面图标后面（同一路径不重复）。
@@ -330,6 +434,10 @@ pub fn add_custom(path: std::path::PathBuf) {
 /// 只加引用——不复制、不移动、不删除任何源文件。已经在面板里的项只改归属。
 pub fn drop_paths(paths: Vec<PathBuf>, group: usize) -> String {
     let app = state();
+    if app.groups.get(group).is_some_and(|group| group.portal.is_some()) {
+        log::info("拒绝把文件拖进只读入口");
+        return "入口是只读视图，请拖到其它分组".to_string();
+    }
     let mut added = 0usize;
     let mut moved = 0usize;
     let mut skipped = 0usize;
@@ -431,6 +539,10 @@ pub fn set_item_icon(index: usize, icon_path: &std::path::Path) -> bool {
     let Some(item) = app.items.get_mut(index) else {
         return false;
     };
+    if item.source == icons::ItemSource::Portal {
+        log::info("入口是只读视图，不能换图标");
+        return false;
+    }
     if !icons::set_custom_icon(item, icon_path) {
         return false;
     }
@@ -450,6 +562,9 @@ pub fn clear_item_icon(index: usize) {
     let Some(item) = app.items.get_mut(index) else {
         return;
     };
+    if item.source == icons::ItemSource::Portal {
+        return;
+    }
     if item.custom_icon.is_none() {
         return;
     }
@@ -465,6 +580,10 @@ pub fn rename_item(index: usize, name: &str) {
     let Some(item) = app.items.get_mut(index) else {
         return;
     };
+    if item.source == icons::ItemSource::Portal {
+        log::info("入口是只读视图，不能改名");
+        return;
+    }
     let name = name.trim();
     if name.is_empty() || item.name == name {
         return;
@@ -482,6 +601,10 @@ pub fn remove_item(index: usize) {
     let Some(item) = app.items.get(index) else {
         return;
     };
+    if item.source == icons::ItemSource::Portal {
+        log::info("入口是只读视图，不能用「移除」删掉文件；要移除请右键入口标题");
+        return;
+    }
     let path = item.path.clone();
     let source = item.source;
     match source {
@@ -495,6 +618,7 @@ pub fn remove_item(index: usize) {
                 icons::save_hidden(&app.hidden);
             }
         }
+        icons::ItemSource::Portal => return,
     }
     let removed = app.items.remove(index);
     // 分组里对应的记录也一并清掉。
@@ -515,6 +639,10 @@ pub fn persist_layout() {
     let mut order: Vec<usize> = Vec::with_capacity(app.items.len());
     let mut used = std::collections::HashSet::new();
     for group in &app.groups {
+        // 入口是只读视图，不进 layout.txt。
+        if group.portal.is_some() {
+            continue;
+        }
         for (index, item) in app.items.iter().enumerate() {
             if used.contains(&index) {
                 continue;
@@ -531,26 +659,45 @@ pub fn persist_layout() {
     }
     // 没归组的排在最后。
     for index in 0..app.items.len() {
+        if app.items[index].source == icons::ItemSource::Portal {
+            continue;
+        }
         if !used.contains(&index) {
             order.push(index);
+        }
+    }
+    // 入口项保留在面板末尾，但不进 layout.txt（它们由 portals.txt + 目录内容决定）。
+    for index in 0..app.items.len() {
+        if app.items[index].source == icons::ItemSource::Portal {
+            order.push(index);
+            used.insert(index);
         }
     }
     if order.len() == app.items.len() {
         let reordered: Vec<_> = order.iter().map(|index| app.items[*index].clone()).collect();
         app.items = reordered;
     }
-    app.layout_order = app
+    let saved: Vec<_> = app
         .items
+        .iter()
+        .filter(|item| item.source != icons::ItemSource::Portal)
+        .cloned()
+        .collect();
+    app.layout_order = saved
         .iter()
         .map(|item| (item.path.clone(), item.name.clone()))
         .collect();
-    icons::save_order(&app.items);
+    icons::save_order(&saved);
 }
 
 /// 拖动排序：把第 `from` 项移动到 `to` 位置。
 pub fn move_item(from: usize, to: usize) {
     let app = state();
     if from >= app.items.len() || to >= app.items.len() || from == to {
+        return;
+    }
+    if app.items[from].source == icons::ItemSource::Portal || app.items[to].source == icons::ItemSource::Portal {
+        log::info("入口是只读视图，不能拖动排序");
         return;
     }
     let item = app.items.remove(from);
@@ -983,6 +1130,7 @@ fn handle_command(command: usize) {
         tray::MENU_CAPTURE => start_capture(state().host),
         tray::MENU_AUTOSTART => toggle_autostart(),
         tray::MENU_HOTKEY => change_hotkey(),
+        tray::MENU_ADD_PORTAL => add_portal_from_picker(),
         tray::MENU_EXIT => request_exit(state().host),
         _ => {}
     }

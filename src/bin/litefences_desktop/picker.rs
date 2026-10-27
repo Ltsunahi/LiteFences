@@ -45,6 +45,77 @@ fn pick_with(owner: HWND, filter_text: &str, title_text: &str) -> Option<PathBuf
     Some(PathBuf::from(text))
 }
 
+/// 选一个目录（文件夹入口用）。只读路径，不做任何修改。
+pub fn pick_folder(owner: HWND) -> Option<PathBuf> {
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+        CoTaskMemFree,
+    };
+    use windows::Win32::UI::Shell::{
+        FOS_DONTADDTORECENT, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS,
+        FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
+    };
+    use windows::core::w;
+
+    // SAFETY: 在 UI 线程创建并显示对话框；调用期间不持有任何跨线程状态。
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let dialog: IFileOpenDialog = match CoCreateInstance(
+            &FileOpenDialog,
+            None,
+            CLSCTX_INPROC_SERVER,
+        ) {
+            Ok(dialog) => dialog,
+            Err(error) => {
+                log::warn(&format!("无法创建文件夹选择器（代码 {}）", error.code().0));
+                return None;
+            }
+        };
+        if let Ok(options) = dialog.GetOptions()
+            && dialog
+                .SetOptions(
+                    options
+                        | FOS_PICKFOLDERS
+                        | FOS_FORCEFILESYSTEM
+                        | FOS_PATHMUSTEXIST
+                        | FOS_DONTADDTORECENT,
+                )
+                .is_err()
+        {
+            log::warn("文件夹选择器不接受目录选择选项");
+            return None;
+        }
+        let _ = dialog.SetTitle(w!("选择要作为入口的文件夹（只读展示，不会移动文件）"));
+        let owner_hwnd = windows::Win32::Foundation::HWND(owner);
+        if let Err(error) = dialog.Show(Some(owner_hwnd)) {
+            log::info(&format!("已取消选择文件夹（代码 {}）", error.code().0));
+            return None;
+        }
+        let item = match dialog.GetResult() {
+            Ok(item) => item,
+            Err(error) => {
+                log::warn(&format!("读取所选文件夹失败（代码 {}）", error.code().0));
+                return None;
+            }
+        };
+        let raw = match item.GetDisplayName(SIGDN_FILESYSPATH) {
+            Ok(raw) => raw,
+            Err(error) => {
+                log::warn(&format!("所选路径不是本地文件夹（代码 {}）", error.code().0));
+                return None;
+            }
+        };
+        let text = String::from_utf16_lossy(raw.as_wide());
+        CoTaskMemFree(Some(raw.as_ptr().cast()));
+        if text.is_empty() {
+            return None;
+        }
+        let dir = PathBuf::from(text);
+        log::info(&format!("选择文件夹：{}", dir.display()));
+        Some(dir)
+    }
+}
+
 pub fn pick_icon_source(owner: HWND) -> Option<PathBuf> {
     pick_with(
         owner,

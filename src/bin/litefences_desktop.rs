@@ -46,6 +46,9 @@ mod overlay;
 #[path = "litefences_desktop/picker.rs"]
 mod picker;
 #[cfg(windows)]
+#[path = "litefences_desktop/portals.rs"]
+mod portals;
+#[cfg(windows)]
 #[path = "litefences_desktop/settings.rs"]
 mod settings;
 #[cfg(windows)]
