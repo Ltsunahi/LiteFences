@@ -2285,6 +2285,42 @@ fn within_cooldown() -> bool {
         .is_some_and(|shown| shown.elapsed() < Duration::from_millis(SHOW_COOLDOWN_MS))
 }
 
+/// 显示系统对话框期间临时取消面板置顶，避免对话框被全屏面板挡住；返回后恢复。
+pub fn run_unpinned<T>(body: impl FnOnce() -> T) -> T {
+    let overlay = state().overlay;
+    let pinned = !overlay.is_null() && state().shown;
+    if pinned {
+        // SAFETY: 句柄有效；只改置顶状态。
+        unsafe {
+            SetWindowPos(
+                overlay,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+    let value = body();
+    if pinned {
+        // SAFETY: 同上。
+        unsafe {
+            SetWindowPos(
+                overlay,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+    value
+}
+
 /// 点「添加图标」：面板不关，只是暂时取消置顶，让系统选择框显示在它上面。
 fn begin_add_icon() {
     let app = state();

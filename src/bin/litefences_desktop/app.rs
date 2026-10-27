@@ -371,7 +371,8 @@ pub fn rebuild_portal_items() {
 pub fn add_portal_from_picker() {
     let app = state();
     let host = app.host;
-    let Some(dir) = crate::picker::pick_folder(host) else {
+    // 面板是置顶全屏的，选目录时要先把它从置顶拿下来，否则对话框会被挡住。
+    let Some(dir) = overlay::run_unpinned(|| crate::picker::pick_folder(host)) else {
         return;
     };
     let app = state();
