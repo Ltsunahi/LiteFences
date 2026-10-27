@@ -22,7 +22,8 @@ use windows_sys::Win32::Graphics::Gdi::{
     GetStockObject, HDC, HFONT, HOLLOW_BRUSH, InvalidateRect, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     MonitorFromPoint, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, PtInRect, RoundRect, SRCCOPY,
     SelectObject, SetBkMode, SetTextColor, TRANSPARENT, GetDC, ReleaseDC, NULL_PEN, Ellipse,
-    LineTo, MoveToEx, UpdateWindow, IntersectClipRect, RestoreDC, SaveDC,
+    LineTo, MoveToEx, UpdateWindow, IntersectClipRect, RestoreDC, SaveDC, AlphaBlend,
+    AC_SRC_OVER, BLENDFUNCTION,
 };
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::UI::Controls::MARGINS;
@@ -56,7 +57,7 @@ const TIMER_DROP_NOTICE: usize = 3;
 /// 唤出后忽略点击的时间窗口，单位毫秒。
 const SHOW_COOLDOWN_MS: u64 = 350;
 /// 入场动画时长；帧间隔略大一点，减少分层窗口的合成次数。
-const ANIM_MS: u64 = 120;
+const ANIM_MS: u64 = 220;
 /// 亚克力最终不透明度。
 const TINT_ALPHA: u32 = 0x99;
 
@@ -372,13 +373,14 @@ pub fn show_panel() {
         }
     }
 
-    // 亚克力模式下从全透明开始，由定时器推进浓度；磨砂底板模式直接整帧显示。
+    // 入场动画：整帧从下方一点点滑上来并淡入（所有虚化模式都有）。
     if app.blur == BlurMode::Accent {
+        // 亚克力模式额外从全透明开始，由定时器推进浓度。
         apply_accent(app.overlay, 0);
-        app.anim_started = Some(Instant::now());
-        // SAFETY: 句柄有效，定时器只用于推进动画。
-        unsafe { SetTimer(app.overlay, TIMER_ANIM, 24, None) };
     }
+    app.anim_started = Some(Instant::now());
+    // SAFETY: 句柄有效，定时器只用于推进动画；16ms ≈ 60fps。
+    unsafe { SetTimer(app.overlay, TIMER_ANIM, 16, None) };
     // 换内容了：先标记静态帧需要重画，再显示窗口，避免第一帧贴到旧缓存。
     app.static_dirty = true;
     // SAFETY: 句柄有效。
@@ -1295,9 +1297,26 @@ fn paint(hwnd: HWND) {
         if cache.is_null() {
             render_static(hdc, app, width, height);
         } else {
-            if app.static_dirty {
+            let redrawn = app.static_dirty;
+            if redrawn {
                 render_static(cache, app, width, height);
                 app.static_dirty = false;
+            }
+            if app.anim_started.is_some() {
+                // 入场动画：整帧按当前不透明度叠加到桌面上，淡入（不位移，避免边缘穿帮）。
+                let progress = anim_progress();
+                let alpha = (progress * 255.0).clamp(0.0, 255.0) as u8;
+                let blend = BLENDFUNCTION {
+                    BlendOp: AC_SRC_OVER as u8,
+                    BlendFlags: 0,
+                    SourceConstantAlpha: alpha,
+                    AlphaFormat: 0,
+                };
+                // SAFETY: 两个 DC 有效；源是整屏 32 位 DIB，目标 DC 来自 BeginPaint。
+                AlphaBlend(
+                    hdc, 0, 0, width, height, cache, 0, 0, width, height, blend,
+                );
+            } else if redrawn {
                 // 内容刚重画过：必须整屏贴一次，否则窗口上会“一半新一半旧”。
                 // SAFETY: 两个 DC 都有效。
                 BitBlt(hdc, 0, 0, width, height, cache, 0, 0, SRCCOPY);
@@ -1334,8 +1353,11 @@ fn paint(hwnd: HWND) {
             // SAFETY: 字体在进程内缓存。
             SelectObject(hdc, font as _);
         }
-        draw_toolbar(hdc, app, &full);
-        draw_search_box(hdc, app, &full);
+        // 动画期间工具条已经在缓存里（跟整帧一起淡入），结束后才每帧单独画。
+        if app.anim_started.is_none() {
+            draw_toolbar(hdc, app, &full);
+            draw_search_box(hdc, app, &full);
+        }
         draw_drop_hover(hdc, app);
         draw_scroll_indicator(hdc, app);
         if let Some(header) = app.header_drag
@@ -1455,6 +1477,11 @@ fn render_static(hdc: HDC, app: &mut crate::state::App, width: i32, height: i32)
         draw_sticky_header(hdc, app);
         RestoreDC(hdc, saved);
         draw_hint(hdc, app, &full);
+        // 入场动画期间把工具条也画进缓存，好让它跟着整帧一起淡入。
+        if app.anim_started.is_some() {
+            draw_toolbar(hdc, app, &full);
+            draw_search_box(hdc, app, &full);
+        }
     }
 }
 
@@ -1822,6 +1849,7 @@ fn draw_scroll_indicator(hdc: HDC, app: &crate::state::App) {
         DeleteObject(brush as _);
     }
 }
+
 
 /// 拖动标题时的插入位置提示：整条细线，中间略亮、两端略暗，避免一整条死板的亮条。
 fn draw_header_indicator(hdc: HDC, app: &crate::state::App, target: usize) {
@@ -2649,8 +2677,20 @@ unsafe extern "system" fn overlay_proc(
             }
             if progress >= 1.0 {
                 app.anim_started = None;
+                // 动画期间工具条被画进了缓存；结束后要重画一版不含工具条的静态帧。
+                app.static_dirty = true;
+                // SAFETY: 句柄有效；最后一帧整屏落定。
+                unsafe {
+                    KillTimer(hwnd, TIMER_ANIM);
+                    InvalidateRect(hwnd, std::ptr::null(), 0);
+                }
+            } else {
+                // 每帧重绘：淡入 + 上滑。
                 // SAFETY: 句柄有效。
-                unsafe { KillTimer(hwnd, TIMER_ANIM) };
+                unsafe {
+                    InvalidateRect(hwnd, std::ptr::null(), 0);
+                    UpdateWindow(hwnd);
+                }
             }
             0
         }
