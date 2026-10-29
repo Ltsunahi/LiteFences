@@ -1365,8 +1365,44 @@ fn paint(hwnd: HWND) {
                     SourceConstantAlpha: alpha,
                     AlphaFormat: 0,
                 };
-                // SAFETY: 两个 DC 有效；源是整屏 32 位 DIB，目标 DC 来自 BeginPaint。
-                AlphaBlend(hdc, 0, 0, width, height, cache, 0, 0, width, height, blend);
+                // 淡入 + 上滑：整帧先从下往上挪一点点再归位。挪动只做 1:1 平移（不重采样），
+                // 顶部露出的那条用底板位图按同样透明度补齐，所以不会露真实桌面、也不会掉帧。
+                let slide = if app.backdrop.is_some() {
+                    ((1.0 - target) * (20.0 * app.layout.scale)).round() as i32
+                } else {
+                    0
+                };
+                if slide > 0 && slide < height {
+                    if let Some(backdrop) = app.backdrop.as_ref() {
+                        backdrop.blend_into(
+                            hdc,
+                            RECT {
+                                left: 0,
+                                top: 0,
+                                right: width,
+                                bottom: slide,
+                            },
+                            alpha,
+                        );
+                    }
+                    // SAFETY: 两个 DC 有效；源与目标尺寸一致，只是纵向平移。
+                    AlphaBlend(
+                        hdc,
+                        0,
+                        slide,
+                        width,
+                        height - slide,
+                        cache,
+                        0,
+                        0,
+                        width,
+                        height - slide,
+                        blend,
+                    );
+                } else {
+                    // SAFETY: 两个 DC 有效；源是整屏 32 位 DIB，目标 DC 来自 BeginPaint。
+                    AlphaBlend(hdc, 0, 0, width, height, cache, 0, 0, width, height, blend);
+                }
                 let frame_ms = frame_started.elapsed().as_millis();
                 if frame_ms > 24 {
                     log::warn(&format!(

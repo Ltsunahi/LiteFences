@@ -5,9 +5,9 @@
 
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
-    DeleteDC, DeleteObject, GetDC, HALFTONE, HDC, ReleaseDC, SRCCOPY, SelectObject,
-    SetStretchBltMode, StretchBlt,
+    AC_SRC_OVER, AlphaBlend, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, CreateCompatibleDC,
+    CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HALFTONE, HDC, ReleaseDC,
+    SRCCOPY, SelectObject, SetStretchBltMode, StretchBlt,
 };
 
 /// 缩小倍数：越大越省事，模糊越“糊”。
@@ -43,6 +43,44 @@ impl Backdrop {
                 self.width,
                 self.height,
                 SRCCOPY,
+            );
+            SelectObject(memory, previous);
+            DeleteDC(memory);
+        }
+    }
+}
+
+impl Backdrop {
+    /// 按不透明度把底板（缩放到目标矩形）叠到 hdc 上：入场动画里顶部露出的那条用它垫底。
+    pub fn blend_into(&self, hdc: HDC, rect: RECT, alpha: u8) {
+        if rect.right <= rect.left || rect.bottom <= rect.top {
+            return;
+        }
+        // SAFETY: 所有 GDI 对象在函数内成对释放。
+        unsafe {
+            let memory = CreateCompatibleDC(hdc);
+            if memory.is_null() {
+                return;
+            }
+            let previous = SelectObject(memory, self.bitmap as _);
+            let blend = BLENDFUNCTION {
+                BlendOp: AC_SRC_OVER as u8,
+                BlendFlags: 0,
+                SourceConstantAlpha: alpha,
+                AlphaFormat: 0,
+            };
+            AlphaBlend(
+                hdc,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                memory,
+                0,
+                0,
+                self.width,
+                self.height,
+                blend,
             );
             SelectObject(memory, previous);
             DeleteDC(memory);
