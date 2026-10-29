@@ -49,6 +49,8 @@
 
 需要 Windows x64 + MSVC（Visual Studio 的 C++ 生成工具），Rust 版本见 `rust-toolchain.toml`。
 
+产物**静态链接 CRT**（`.cargo/config.toml` 里 `+crt-static`），所以拷到没装 VC++ 运行库的机器上也能直接双击运行。
+
 ```powershell
 cargo build --release --features shell --locked
 # 产物：target\release\litefences-desktop.exe（约 390 KB）
@@ -91,6 +93,7 @@ cargo build --release --features shell --locked
 ## 已知限制
 
 - 没有代码签名：换新版本首次运行时 Windows 可能提示「已保护你的电脑」，点「仍要运行」即可。
+- 只在 Win11 + 单屏的开发机上实测过；Win10、多屏/混合 DPI 只有代码路径，没有实机验证。
 - 多屏 / 混合 DPI 只有代码路径，没有第二块屏实机验证；Win10 也没有实机跑过。
 - 受限权限（低完整性级别）下托盘创建会失败，热键仍然可用。
 - 桌面空白双击唤出依赖系统鼠标钩子，装了其它桌面整理软件时可能被抢。

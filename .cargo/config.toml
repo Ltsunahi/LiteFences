@@ -1,0 +1,4 @@
+# 静态链接 CRT：这样拷到没装 VC++ 运行库的机器上也能直接双击运行。
+# 代价是 exe 大一点点（几十 KB），换来“不依赖任何运行库”的可移植性。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -55,6 +55,7 @@ const HOTKEY_CAPTURE: i32 = 3;
 pub fn run() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     log::init();
+    install_panic_hook();
     log::info(&format!(
         "启动 pid={} args={args:?} 日志={}",
         std::process::id(),
@@ -1024,6 +1025,27 @@ fn change_hotkey() {
         });
     }
     log::info(&format!("唤出热键已改为 {}", chosen.describe()));
+}
+
+/// 崩溃也要留痕：panic 先把信息写进日志，再按默认行为终止。
+///
+/// 没有这一步，别人机器上闪退就只剩一个“程序没了”，日志里什么都没有。
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|location| format!("{}:{}", location.file(), location.line()))
+            .unwrap_or_else(|| "未知位置".to_string());
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "（无消息）".to_string());
+        log::error(&format!("崩溃：{payload} @ {location}"));
+        previous(info);
+    }));
 }
 
 fn message_loop() -> std::process::ExitCode {

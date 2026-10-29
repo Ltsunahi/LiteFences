@@ -503,3 +503,32 @@ UI 窗口本身在这个沙箱会话里起不来（msiexec 从非交互上下文
 验证：把真实数据目录复制一份跑迁移 —— `config.json` 10916 字节、83 条 items、2 个分组、1 条 hidden，
 自检 `failures=0`；再跑第二次（只剩 config.json）仍然 `items=82`、分组 2、`failures=0`。
 `cargo test` 13 项通过（新增 store 两条：序列化往返、缺字段回退）。
+
+## 2026-10-29（第六轮）：换台机器也能跑
+
+审了一遍“拿到别人电脑上会发生什么”，修了三处会直接翻车的地方：
+
+### 1. 桌面目录改用系统 API
+
+原来按 `USERPROFILE` / `PUBLIC` / `OneDrive` + `\Desktop` 猜路径。桌面被重定向到 D 盘、
+或者中文 OneDrive 的「桌面」目录时就扫不到图标。现在先问 `SHGetKnownFolderPath`：
+`FOLDERID_Desktop` + `FOLDERID_PublicDesktop`，环境变量只作兜底；顺带按小写去重。
+日志里会打印实际使用的目录，方便排障：
+
+```
+INFO 桌面目录：C:\Users\16\Desktop | C:\Users\Public\Desktop
+```
+
+### 2. 静态链接 CRT
+
+原来动态依赖 `VCRUNTIME140.dll` + UCRT，干净机器没装 VC++ 运行库就起不来。
+`.cargo/config.toml` 加 `target-feature=+crt-static`，产物 576,512 字节，
+字符串表里已经搜不到 `VCRUNTIME140.dll` / `api-ms-win-crt-*`。
+
+### 3. 崩溃留痕
+
+`panic = "abort"` 下崩溃是静默的。加了 panic hook：消息 + 文件:行号写进 `launcher.log` 再终止，
+别人的机器上闪退至少能查。
+
+验证：全新数据目录启动 → 桌面目录解析正确、扫到 82 项、自检 `failures=0`；
+静态链接版本同样通过；MSI 重装后运行正常。

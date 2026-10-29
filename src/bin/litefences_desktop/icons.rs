@@ -12,9 +12,11 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
 };
 use windows_sys::Win32::UI::Controls::{HIMAGELIST, ILD_TRANSPARENT, ImageList_GetIcon};
+use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::UI::Shell::{
-    SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetImageList,
-    SHIL_EXTRALARGE, ShellExecuteW,
+    FOLDERID_Desktop, FOLDERID_PublicDesktop, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON,
+    SHGFI_SYSICONINDEX, SHGetFileInfoW, SHGetImageList, SHGetKnownFolderPath, SHIL_EXTRALARGE,
+    ShellExecuteW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, HICON, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LoadImageW, SW_SHOWNORMAL,
@@ -86,7 +88,15 @@ pub fn collect_items(hidden: &[PathBuf]) -> Result<Vec<DesktopItem>, String> {
     };
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut found: Vec<(bool, String, PathBuf)> = Vec::new();
-    for dir in desktop_dirs() {
+    let dirs = desktop_dirs();
+    log::info(&format!(
+        "桌面目录：{}",
+        dirs.iter()
+            .map(|dir| dir.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    ));
+    for dir in dirs {
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) => {
@@ -168,19 +178,60 @@ pub fn desktop_stamp() -> u64 {
     stamp
 }
 
+/// 桌面目录：优先问系统要「已知文件夹」，这样重定向到 OneDrive、D 盘、
+/// 或者中文系统里叫「桌面」的目录都能找对；只有 API 失败时才按环境变量猜。
 fn desktop_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(profile) = std::env::var_os("USERPROFILE") {
-        dirs.push(PathBuf::from(profile).join("Desktop"));
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for id in [&FOLDERID_Desktop, &FOLDERID_PublicDesktop] {
+        if let Some(dir) = known_folder(id) {
+            push_unique(&mut dirs, dir);
+        }
     }
-    if let Some(public) = std::env::var_os("PUBLIC") {
-        dirs.push(PathBuf::from(public).join("Desktop"));
-    }
-    if let Some(one_drive) = std::env::var_os("OneDrive") {
-        dirs.push(PathBuf::from(one_drive).join("Desktop"));
+    if dirs.is_empty() {
+        // 兜底：老办法，USERPROFILE / PUBLIC / OneDrive 下的 Desktop。
+        for (key, leaf) in [
+            ("USERPROFILE", "Desktop"),
+            ("PUBLIC", "Desktop"),
+            ("OneDrive", "Desktop"),
+        ] {
+            if let Some(base) = std::env::var_os(key) {
+                push_unique(&mut dirs, PathBuf::from(base).join(leaf));
+            }
+        }
     }
     dirs.retain(|dir| dir.is_dir());
     dirs
+}
+
+/// 去掉重复目录（Windows 路径大小写不敏感）。
+fn push_unique(dirs: &mut Vec<PathBuf>, dir: PathBuf) {
+    let key = dir.to_string_lossy().to_lowercase();
+    if !dirs
+        .iter()
+        .any(|known| known.to_string_lossy().to_lowercase() == key)
+    {
+        dirs.push(dir);
+    }
+}
+
+/// 问系统要已知文件夹的真实路径（考虑重定向）。
+fn known_folder(id: &GUID) -> Option<PathBuf> {
+    // SAFETY: 成功时返回一块由 COM 分配、以 0 结尾的 UTF-16 字符串，用完必须 CoTaskMemFree。
+    unsafe {
+        let mut raw: *mut u16 = std::ptr::null_mut();
+        let hr = SHGetKnownFolderPath(id, 0, std::ptr::null_mut(), &mut raw);
+        if hr < 0 || raw.is_null() {
+            log::warn(&format!("SHGetKnownFolderPath 失败 hr=0x{hr:08x}"));
+            return None;
+        }
+        let mut len = 0usize;
+        while *raw.add(len) != 0 {
+            len += 1;
+        }
+        let text = String::from_utf16_lossy(std::slice::from_raw_parts(raw, len));
+        CoTaskMemFree(raw as *mut core::ffi::c_void);
+        Some(PathBuf::from(text))
+    }
 }
 
 fn display_name(file_name: &str) -> String {
