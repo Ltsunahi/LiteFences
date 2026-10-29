@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  LiteFences 的 MSI 打包定义（WiX v5+）。
+
+  特点：
+  - 按用户安装（perUser）：装到 %LOCALAPPDATA%\Programs\LiteFences，全程不需要管理员权限；
+  - 开始菜单 + 桌面快捷方式，图标取自 exe 自身；
+  - 升级用 MajorUpgrade：同版本重装 / 高版本覆盖低版本；卸载不会碰 %LOCALAPPDATA%\LiteFencesDesktop 里的用户配置。
+
+  构建：
+    wix build packaging\LiteFences.wxs -arch x64 -d SourceDir=..\LiteFencesDesktop -d Version=0.1.0 -o LiteFences-0.1.0-x64.msi
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="LiteFences"
+    Manufacturer="Ltsunahi"
+    Version="$(var.Version)"
+    UpgradeCode="7C5A2AFB-91B1-43CF-B18A-471AC32968E1"
+    Language="2052"
+    Scope="perUser"
+    Compressed="yes">
+
+    <SummaryInformation Description="LiteFences 桌面启动器" Manufacturer="Ltsunahi" />
+
+    <!-- 先装新版本再删旧版本；不允许降级。 -->
+    <MajorUpgrade
+      DowngradeErrorMessage="已安装更高版本的 LiteFences，请先卸载再安装这个版本。"
+      Schedule="afterInstallValidate" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\LiteFencesDesktop.exe" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <!-- 目录结构：LocalAppData\Programs\LiteFences -->
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="LiteFences" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppMenuFolder" Name="LiteFences" />
+    </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
+
+    <!-- 程序与说明文件 -->
+    <Component Id="MainExecutable" Directory="INSTALLFOLDER" Guid="A65F073D-96F7-4A64-AF4C-F6A8B73D5E64">
+      <File Id="MainExe" Source="$(var.SourceDir)\LiteFencesDesktop.exe" KeyPath="yes" />
+    </Component>
+    <Component Id="ManualFile" Directory="INSTALLFOLDER" Guid="12040A05-C6DD-4DF1-8B36-FDE95944502D">
+      <File Id="ManualTxt" Source="$(var.SourceDir)\使用说明.txt" Name="使用说明.txt" KeyPath="yes" />
+    </Component>
+
+    <!-- 开始菜单快捷方式；组件的 KeyPath 用注册表值，快捷方式本身不能当 KeyPath。 -->
+    <Component Id="StartMenuShortcut" Directory="AppMenuFolder" Guid="D14DDC08-969F-4EAD-8759-5DDB2F3BDE5C">
+      <Shortcut Id="StartMenuLink"
+                Name="LiteFences"
+                Description="LiteFences 桌面启动器"
+                Target="[INSTALLFOLDER]LiteFencesDesktop.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="AppIcon" />
+      <RemoveFolder Id="RemoveAppMenuFolder" Directory="AppMenuFolder" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\Ltsunahi\LiteFences" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!-- 桌面快捷方式 -->
+    <Component Id="DesktopShortcut" Directory="DesktopFolder" Guid="556A1932-29F1-42C2-870B-DC67D1403DB2">
+      <Shortcut Id="DesktopLink"
+                Name="LiteFences"
+                Description="LiteFences 桌面启动器"
+                Target="[INSTALLFOLDER]LiteFencesDesktop.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="AppIcon" />
+      <RegistryValue Root="HKCU" Key="Software\Ltsunahi\LiteFences" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Feature Id="Main" Title="LiteFences" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="ManualFile" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+  </Package>
+</Wix>

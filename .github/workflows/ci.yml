@@ -14,7 +14,7 @@ jobs:
       - name: Toolchain
         run: rustup show
 
-      - name: Build (shell)
+      - name: Build (shell launcher)
         run: cargo build --release --features shell --locked
 
       - name: Test (desktop launcher)
@@ -22,3 +22,19 @@ jobs:
 
       - name: Build (v1 prototype)
         run: cargo build --release --locked
+
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 5.*
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
+          ./scripts/Build-Msi.ps1 -Out dist/LiteFences-x64.msi
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteFences-msi
+          path: dist/*.msi
+          if-no-files-found: error

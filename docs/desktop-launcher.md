@@ -405,3 +405,29 @@ groups.txt → [组B] [组A] [其它]
 
 验证：五个主题各跑一次 `--show-ms` + `--capture` 截图（`E:\note\.build\themes\*.png`），
 `cargo test` 9 项通过（新增主题 3 项：回退、颜色混合、key 唯一）。
+
+## 2026-10-29（第三轮）：改成 MSI 安装
+
+原来的 `install.ps1` 只能在 PowerShell 里跑，双击安装体验一般，也进不了「设置 → 应用」的规范列表。
+现在用 WiX v5 出 MSI：
+
+| 文件 | 作用 |
+| --- | --- |
+| `packaging/LiteFences.wxs` | 打包定义（WiX v5 语法，`Scope="perUser"`） |
+| `packaging/使用说明.txt` | 打包进去的说明书（和便携目录那份保持同步） |
+| `scripts/Build-Msi.ps1` | 构建脚本：版本号取自 Cargo.toml，暂存 exe + 说明，调 `wix build` |
+
+口径：
+
+- **按用户安装**到 `%LOCALAPPDATA%\Programs\LiteFences`，不需要管理员权限；
+- 开始菜单快捷方式（`程序\LiteFences\LiteFences.lnk`）+ 桌面快捷方式，图标直接取自 exe；
+- `MajorUpgrade` 不允许降级；卸载走 MSI，**不动** `%LOCALAPPDATA%\LiteFencesDesktop` 的配置；
+- 组件 KeyPath 用 HKCU 下的注册表值（快捷方式本身不能当 KeyPath）。
+
+验证（本机实测整轮）：
+
+1. `msiexec /a` 解包：产物落在 `LocalApp\Programs\LiteFences\`，exe 与说明书齐全；
+2. 先 `卸载.cmd -Quiet` 清掉旧脚本安装 → `msiexec /i ... /qn` → 文件、两个快捷方式、
+   `设置 → 应用` 里的 LiteFences 0.1.0（Publisher=Ltsunahi）都在；
+3. 已安装的 exe 跑 `--self-test`：`failures=0`；
+4. `msiexec /x {ProductCode} /qn` → 程序目录与桌面快捷方式都被清掉，配置目录保留。
