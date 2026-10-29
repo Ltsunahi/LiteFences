@@ -208,6 +208,8 @@ pub struct App {
     pub hidden: Vec<std::path::PathBuf>,
     /// 唤出热键（可在托盘菜单里改）。
     pub hotkey: crate::settings::Hotkey,
+    /// 当前配色主题。
+    pub theme: &'static crate::theme::Theme,
     /// 搜索关键字（空 = 不过滤）。
     pub search: String,
     /// 搜索栏是否展开。

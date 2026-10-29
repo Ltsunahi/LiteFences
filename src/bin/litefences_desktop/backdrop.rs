@@ -173,7 +173,7 @@ impl Drop for Backdrop {
 }
 
 /// 抓取屏幕上的 `area` 区域，缩小、模糊、压暗后返回可直接铺满的底板。
-pub fn capture(area: RECT) -> Option<Backdrop> {
+pub fn capture(area: RECT, tint_color: (u8, u8, u8), tint_strength: f32) -> Option<Backdrop> {
     let width = area.right - area.left;
     let height = area.bottom - area.top;
     if width <= 0 || height <= 0 {
@@ -237,7 +237,7 @@ pub fn capture(area: RECT) -> Option<Backdrop> {
 
         let pixels = std::slice::from_raw_parts_mut(bits as *mut u8, (small_width * small_height * 4) as usize);
         blur(pixels, small_width, small_height, BLUR_RADIUS);
-        tint(pixels, small_width * small_height);
+        tint(pixels, small_width * small_height, tint_color, tint_strength);
 
         Some(Backdrop {
             bitmap: bitmap as isize,
@@ -302,19 +302,20 @@ fn blur(pixels: &mut [u8], width: i32, height: i32, radius: i32) {
 }
 
 /// 压暗并轻微偏冷，让图标和文字更清楚。
-fn tint(pixels: &mut [u8], count: i32) {
+fn tint(pixels: &mut [u8], count: i32, (tr, tg, tb): (u8, u8, u8), strength: f32) {
+    let strength = strength.clamp(0.0, 1.0);
     for index in 0..count as usize {
         let base = index * 4;
         let r = f32::from(pixels[base]);
         let g = f32::from(pixels[base + 1]);
         let b = f32::from(pixels[base + 2]);
         let mix = |value: f32, target: f32| -> u8 {
-            let mixed = value * 0.55 + target * 0.45;
+            let mixed = value * (1.0 - strength) + target * strength;
             mixed.clamp(0.0, 255.0) as u8
         };
-        pixels[base] = mix(r, 22.0);
-        pixels[base + 1] = mix(g, 24.0);
-        pixels[base + 2] = mix(b, 30.0);
+        pixels[base] = mix(r, f32::from(tr));
+        pixels[base + 1] = mix(g, f32::from(tg));
+        pixels[base + 2] = mix(b, f32::from(tb));
         pixels[base + 3] = 255;
     }
 }

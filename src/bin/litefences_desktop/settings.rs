@@ -1,4 +1,4 @@
-//! 设置持久化（目前只有唤出热键）。
+//! 设置持久化：唤出热键 + 配色主题。
 
 use std::path::PathBuf;
 
@@ -69,11 +69,35 @@ fn settings_path() -> PathBuf {
     log::base_dir().join("settings.txt")
 }
 
-pub fn load_hotkey() -> Hotkey {
+/// 全部设置。字段少，直接整份读整份写，避免改一项冲掉另一项。
+#[derive(Clone, Debug)]
+pub struct Settings {
+    pub hotkey: Hotkey,
+    pub theme: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            hotkey: Hotkey::default(),
+            theme: "space".to_string(),
+        }
+    }
+}
+
+pub fn load() -> Settings {
+    let mut settings = Settings::default();
     let Ok(text) = std::fs::read_to_string(settings_path()) else {
-        return Hotkey::default();
+        return settings;
     };
     for line in text.lines() {
+        if let Some(value) = line.trim().strip_prefix("theme=") {
+            let value = value.trim();
+            if !value.is_empty() {
+                settings.theme = value.to_string();
+            }
+            continue;
+        }
         let Some(value) = line.trim().strip_prefix("hotkey=") else {
             continue;
         };
@@ -83,22 +107,29 @@ pub fn load_hotkey() -> Hotkey {
         if let (Ok(modifiers), Ok(key)) = (modifiers.trim().parse(), key.trim().parse()) {
             let hotkey = Hotkey { modifiers, key };
             if hotkey.modifiers != 0 && hotkey.key != 0 {
-                return hotkey;
+                settings.hotkey = hotkey;
             }
         }
     }
-    Hotkey::default()
+    settings
 }
 
-pub fn save_hotkey(hotkey: Hotkey) {
+pub fn save(settings: &Settings) {
     let path = settings_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let text = format!("# LiteFences 设置\nhotkey={},{}\n", hotkey.modifiers, hotkey.key);
+    let text = format!(
+        "# LiteFences 设置\nhotkey={},{}\ntheme={}\n",
+        settings.hotkey.modifiers, settings.hotkey.key, settings.theme
+    );
     if let Err(error) = std::fs::write(&path, text) {
         log::error(&format!("保存设置失败：{error}"));
     } else {
-        log::info(&format!("已保存热键：{}", hotkey.describe()));
+        log::info(&format!(
+            "已保存设置：热键 {}，主题 {}",
+            settings.hotkey.describe(),
+            settings.theme
+        ));
     }
 }

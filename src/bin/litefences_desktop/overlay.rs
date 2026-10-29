@@ -364,7 +364,8 @@ pub fn show_panel() {
     // 自己抓一张桌面做磨砂底板（此时面板还没显示、桌面图标已隐藏）。
     if app.blur == BlurMode::Frost {
         let started = Instant::now();
-        app.backdrop = crate::backdrop::capture(area);
+        app.backdrop =
+            crate::backdrop::capture(area, app.theme.tint, app.theme.tint_strength);
         log::info(&format!(
             "磨砂底板：{}（{}ms）",
             if app.backdrop.is_some() { "就绪" } else { "抓取失败，退回深色底" },
@@ -1552,7 +1553,7 @@ fn render_static(hdc: HDC, app: &mut crate::state::App, width: i32, height: i32)
         if let Some(backdrop) = app.backdrop.as_ref() {
             backdrop.draw(hdc, width, height);
         } else if app.blur == BlurMode::Dim || app.blur == BlurMode::Off {
-            let brush = CreateSolidBrush(0x0016_1616 as COLORREF);
+            let brush = CreateSolidBrush(app.theme.bar as COLORREF);
             let full = RECT {
                 left: 0,
                 top: 0,
@@ -1659,7 +1660,7 @@ fn draw_sticky_header(hdc: HDC, app: &crate::state::App) {
     let rect = sticky_header(app).map(|(_, rect)| rect).unwrap_or(header.rect);
     // 吸顶条必须有底色，否则滚过去的图标会透到标题上。
     unsafe {
-        let brush = CreateSolidBrush(0x0016_1616);
+        let brush = CreateSolidBrush(app.theme.bar);
         FillRect(hdc, &rect, brush);
         DeleteObject(brush as _);
     }
@@ -1681,7 +1682,7 @@ fn draw_one_header(hdc: HDC, app: &crate::state::App, header: &Header, rect: REC
             right: rect.right,
             bottom: rect.bottom,
         };
-        let brush = CreateSolidBrush(0x0050_5050);
+        let brush = CreateSolidBrush(app.theme.line);
         FillRect(hdc, &line, brush);
         DeleteObject(brush as _);
         let mut text_rect = RECT {
@@ -1691,7 +1692,7 @@ fn draw_one_header(hdc: HDC, app: &crate::state::App, header: &Header, rect: REC
             bottom: rect.bottom,
         };
         SetBkMode(hdc, TRANSPARENT as i32);
-        SetTextColor(hdc, 0x00C8_C8C8);
+        SetTextColor(hdc, app.theme.text_dim);
         DrawTextW(
             hdc,
             text.as_ptr(),
@@ -1721,7 +1722,7 @@ fn draw_items(hdc: HDC, app: &crate::state::App, paint: &RECT) {
             }
             let icon = app.layout.icon;
             if index == app.items.len() {
-                draw_add_tile(hdc, tile, scale, icon);
+                draw_add_tile(hdc, tile, scale, icon, app.theme);
                 continue;
             }
             let item = &app.items[index];
@@ -1734,13 +1735,20 @@ fn draw_items(hdc: HDC, app: &crate::state::App, paint: &RECT) {
                 let y = tile.top + ((12.0 * scale) as i32);
                 DrawIconEx(hdc, x, y, item.icon, icon, icon, 0, std::ptr::null_mut(), DI_NORMAL);
             }
-            draw_label(hdc, &item.name, tile, scale, icon);
+            draw_label(hdc, &item.name, tile, scale, icon, app.theme);
         }
     }
 }
 
 /// 图标下方的名字：先画深色阴影，再画白字，浅色壁纸上也能看清。
-unsafe fn draw_label(hdc: HDC, name: &str, tile: RECT, scale: f32, icon: i32) {
+unsafe fn draw_label(
+    hdc: HDC,
+    name: &str,
+    tile: RECT,
+    scale: f32,
+    icon: i32,
+    theme: &crate::theme::Theme,
+) {
     let label_top = tile.top + ((12.0 * scale) as i32) + icon + (6.0 * scale) as i32;
     let mut rect = RECT {
         left: tile.left + (4.0 * scale) as i32,
@@ -1757,15 +1765,21 @@ unsafe fn draw_label(hdc: HDC, name: &str, tile: RECT, scale: f32, icon: i32) {
     shadow.bottom += 1;
     // SAFETY: 字体已由 paint() 选进 DC。
     unsafe {
-        SetTextColor(hdc, 0x0010_1010);
+        SetTextColor(hdc, theme.label_shadow);
         DrawTextW(hdc, text.as_ptr(), -1, &mut shadow, flags);
-        SetTextColor(hdc, 0x00FF_FFFF);
+        SetTextColor(hdc, theme.text);
         DrawTextW(hdc, text.as_ptr(), -1, &mut rect, flags);
     }
 }
 
 /// 网格末尾的「添加图标」方块：一个方框加十字（纯 FillRect，不依赖字体）。
-unsafe fn draw_add_tile(hdc: HDC, tile: RECT, scale: f32, icon: i32) {
+unsafe fn draw_add_tile(
+    hdc: HDC,
+    tile: RECT,
+    scale: f32,
+    icon: i32,
+    theme: &crate::theme::Theme,
+) {
     let cell_w = tile.right - tile.left;
     let size = icon + (8.0 * scale) as i32;
     let left = tile.left + (cell_w - size) / 2;
@@ -1773,7 +1787,7 @@ unsafe fn draw_add_tile(hdc: HDC, tile: RECT, scale: f32, icon: i32) {
     let thickness = (2.0 * scale).max(2.0) as i32;
     // SAFETY: 画刷在本函数内创建并释放。
     unsafe {
-        let brush = CreateSolidBrush(0x00E0_E0E0);
+        let brush = CreateSolidBrush(theme.text_dim);
         let frame = [
             RECT { left, top, right: left + size, bottom: top + thickness },
             RECT { left, top: top + size - thickness, right: left + size, bottom: top + size },
@@ -1808,7 +1822,7 @@ unsafe fn draw_add_tile(hdc: HDC, tile: RECT, scale: f32, icon: i32) {
             brush,
         );
         DeleteObject(brush as _);
-        draw_label(hdc, "添加图标", tile, scale, icon);
+        draw_label(hdc, "添加图标", tile, scale, icon, theme);
     }
 }
 
@@ -1836,9 +1850,9 @@ unsafe fn blit_region(hdc: HDC, cache: HDC, rect: RECT) {
 }
 
 /// 目标格子的白色描边。
-unsafe fn draw_target_outline(hdc: HDC, tile: RECT, scale: f32) {
+unsafe fn draw_target_outline(hdc: HDC, tile: RECT, scale: f32, theme: &crate::theme::Theme) {
     // SAFETY: 画笔与画刷在本段内创建并释放。
-    unsafe { draw_outline(hdc, tile, scale, 0x00FF_FFFF) };
+    unsafe { draw_outline(hdc, tile, scale, theme.text) };
 }
 
 /// 给格子画一圈描边（颜色用 COLORREF）。
@@ -1941,7 +1955,7 @@ fn draw_scroll_indicator(hdc: HDC, app: &crate::state::App) {
             right: x + width,
             bottom: track_bottom,
         };
-        let brush = CreateSolidBrush(0x0030_3030);
+        let brush = CreateSolidBrush(app.theme.line);
         FillRect(hdc, &track, brush);
         DeleteObject(brush as _);
         let thumb = RECT {
@@ -1950,7 +1964,7 @@ fn draw_scroll_indicator(hdc: HDC, app: &crate::state::App) {
             right: x + width,
             bottom: thumb_top as i32 + thumb_h as i32,
         };
-        let brush = CreateSolidBrush(0x0090_9090);
+        let brush = CreateSolidBrush(app.theme.accent);
         FillRect(hdc, &thumb, brush);
         DeleteObject(brush as _);
     }
@@ -1991,13 +2005,10 @@ fn draw_header_indicator(hdc: HDC, app: &crate::state::App, target: usize) {
             let t = (index as f32 + 0.5) / SEGMENTS as f32;
             // 0 = 两端，1 = 中间。
             let centered = 1.0 - (2.0 * t - 1.0).abs();
-            let mix = centered.powf(0.55);
-            let blend = |from: f32, to: f32| (from + (to - from) * mix) as u32;
-            let r = blend(94.0, 166.0);
-            let g = blend(134.0, 204.0);
-            let b = blend(184.0, 255.0);
-            // COLORREF 是 0x00BBGGRR。
-            let color = (b << 16) | (g << 8) | r;
+            let amount = centered.powf(0.55);
+            // 两端淡向工具条底色，中间用主题强调色。
+            let ends = crate::theme::mix(app.theme.accent, app.theme.bar, 0.55);
+            let color = crate::theme::mix(ends, app.theme.accent, amount);
             let brush = CreateSolidBrush(color);
             let piece = RECT {
                 left: start,
@@ -2035,10 +2046,10 @@ fn draw_drop_hover(hdc: HDC, app: &crate::state::App) {
     unsafe {
         let saved = SaveDC(hdc);
         IntersectClipRect(hdc, 0, content_top(app), app.layout.width, app.layout.height);
-        let brush = CreateSolidBrush(0x0018_2C18);
+        let brush = CreateSolidBrush(app.theme.drop_bg);
         FillRect(hdc, &header_rect, brush);
         DeleteObject(brush as _);
-        draw_outline(hdc, section, scale, 0x0090_E090);
+        draw_outline(hdc, section, scale, app.theme.drop_line);
         RestoreDC(hdc, saved);
     }
     // 填色盖住了标题文字，补画一次。
@@ -2061,7 +2072,7 @@ fn draw_drag(hdc: HDC, app: &crate::state::App, paint: &RECT) {
         let tile = view_rect(app, raw);
         if intersects(&tile, paint) {
             // SAFETY: DC 有效。
-            unsafe { draw_target_outline(hdc, tile, scale) };
+            unsafe { draw_target_outline(hdc, tile, scale, app.theme) };
         }
     }
     // SAFETY: DC 有效。
@@ -2140,7 +2151,7 @@ fn draw_toolbar(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     let scale = app.layout.scale;
     // SAFETY: 画刷与字体都在本函数内用完即释放。
     unsafe {
-        let brush = CreateSolidBrush(0x0016_1616);
+        let brush = CreateSolidBrush(app.theme.bar);
         FillRect(hdc, &bar, brush);
         DeleteObject(brush as _);
         // 底边一条分隔线
@@ -2150,25 +2161,26 @@ fn draw_toolbar(hdc: HDC, app: &crate::state::App, paint: &RECT) {
             right: bar.right,
             bottom: bar.bottom,
         };
-        let line_brush = CreateSolidBrush(0x0040_4040);
+        let line_brush = CreateSolidBrush(app.theme.line);
         FillRect(hdc, &line, line_brush);
         DeleteObject(line_brush as _);
     }
-    draw_chip(hdc, settings_chip_rect(app), "设置", 0x0040_4040, 0x00E8_E8E8, scale);
+    let theme = app.theme;
+    draw_chip(hdc, settings_chip_rect(app), "设置", theme.chip, theme.text, scale);
     draw_chip(
         hdc,
         new_group_chip_rect(app),
         "＋ 新建分组",
-        0x0040_4040,
-        0x00E8_E8E8,
+        theme.chip,
+        theme.text,
         scale,
     );
     draw_chip(
         hdc,
         remove_chip_rect(app),
         if app.remove_mode { "移除中" } else { "移除" },
-        if app.remove_mode { 0x0030_30C0 } else { 0x0040_4040 },
-        if app.remove_mode { 0x00FF_FFFF } else { 0x00E8_E8E8 },
+        if app.remove_mode { theme.chip_hot } else { theme.chip },
+        if app.remove_mode { theme.warn_text } else { theme.text },
         scale,
     );
 }
@@ -2286,11 +2298,11 @@ fn draw_search_box(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     let expanded = (box_rect.right - box_rect.left) > (70.0 * scale) as i32;
     if expanded {
         let (text, color) = if app.search.is_empty() {
-            ("输入关键字…".to_string(), 0x0090_9090)
+            ("输入关键字…".to_string(), app.theme.text_dim)
         } else {
             (
                 format!("{}　（{}）", app.search, count_matches(app)),
-                0x00FF_FFFF,
+                app.theme.text,
             )
         };
         let label = wide(&text);
@@ -2318,7 +2330,7 @@ fn draw_search_box(hdc: HDC, app: &crate::state::App, paint: &RECT) {
                     right: box_rect.right - (6.0 * scale) as i32,
                     bottom: box_rect.bottom - (2.0 * scale) as i32,
                 };
-                let brush = CreateSolidBrush(0x0080_8080);
+                let brush = CreateSolidBrush(app.theme.accent);
                 FillRect(hdc, &underline, brush);
                 DeleteObject(brush as _);
             }
@@ -2330,7 +2342,7 @@ fn draw_search_box(hdc: HDC, app: &crate::state::App, paint: &RECT) {
         let center_y = (box_rect.top + box_rect.bottom) / 2 - 1;
         // SAFETY: 画笔与画刷用完即释放。
         unsafe {
-            let pen = CreatePen(PS_SOLID, (2.0 * scale).max(2.0) as i32, 0x00E0_E0E0);
+            let pen = CreatePen(PS_SOLID, (2.0 * scale).max(2.0) as i32, app.theme.text_dim);
             let hollow = GetStockObject(HOLLOW_BRUSH);
             let old_pen = SelectObject(hdc, pen as _);
             let old_brush = SelectObject(hdc, hollow);
@@ -2431,13 +2443,14 @@ fn ui_font(app: &mut crate::state::App) -> HFONT {
 
 fn draw_hint(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     let scale = app.layout.scale;
+    let theme = app.theme;
     let (text, background, foreground) = if let Some((notice, _)) = app.drop_notice.as_ref() {
-        (notice.clone(), 0x0018_4A24u32, 0x00E8_FFE8u32)
+        (notice.clone(), crate::theme::mix(theme.hint_bg, theme.drop_line, 0.35), theme.text)
     } else if app.remove_mode {
         (
             "移除模式：单击图标从面板移除（源文件不动）　·　再点右上角或按 Esc 退出".to_string(),
-            0x0020_20B0u32,
-            0x00FF_FFFFu32,
+            theme.chip_hot,
+            theme.warn_text,
         )
     } else if !app.search.is_empty() {
         (
@@ -2446,14 +2459,14 @@ fn draw_hint(hdc: HDC, app: &crate::state::App, paint: &RECT) {
                 app.search,
                 count_matches(app)
             ),
-            0x0040_2A1A,
-            0x00F0_F0F0u32,
+            theme.hint_bg,
+            theme.text,
         )
     } else {
         (
             "拖动图标排序　·　单击打开　·　拖入文件即加入　·　单击空白处或按 Esc 收起".to_string(),
-            0x0020_2020u32,
-            0x00F0_F0F0u32,
+            theme.hint_bg,
+            theme.text,
         )
     };
     let text = wide(&text);
@@ -2555,11 +2568,11 @@ fn draw_banner(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     // SAFETY: 画刷与字体都在本函数内创建并释放。
     // SAFETY: 画刷在本函数内创建并释放；字体已由 paint() 选入 DC。
     unsafe {
-        let brush = CreateSolidBrush(0x0028_3CB4);
+        let brush = CreateSolidBrush(app.theme.warn_bg);
         FillRect(hdc, &bar, brush);
         DeleteObject(brush as _);
         SetBkMode(hdc, TRANSPARENT as i32);
-        SetTextColor(hdc, 0x00FF_FFFF);
+        SetTextColor(hdc, app.theme.warn_text);
         DrawTextW(
             hdc,
             text.as_ptr(),
@@ -2873,7 +2886,7 @@ unsafe extern "system" fn overlay_proc(
                                 if let Some(index) = target
                                     && let Some(raw) = app.layout.tiles.get(index).copied()
                                 {
-                                    draw_target_outline(hdc, view_rect(app, raw), app.layout.scale);
+                                    draw_target_outline(hdc, view_rect(app, raw), app.layout.scale, app.theme);
                                 }
                                 // 悬停到分组标题：整条高亮，松手就移入。
                                 if let Some(old) = drag.header_rect {
@@ -2886,10 +2899,10 @@ unsafe extern "system" fn overlay_proc(
                                         right: rect.right,
                                         bottom: rect.bottom - 2,
                                     };
-                                    let brush = CreateSolidBrush(0x0050_4020);
+                                    let brush = CreateSolidBrush(app.theme.drop_bg);
                                     FillRect(hdc, &inner, brush);
                                     DeleteObject(brush as _);
-                                    draw_outline(hdc, inner, app.layout.scale, 0x0080_D0FF);
+                                    draw_outline(hdc, inner, app.layout.scale, app.theme.drop_line);
                                 }
                                 // 缓存里没有工具条，拖动经过时补画，避免被贴成黑块。
                                 let full = RECT {

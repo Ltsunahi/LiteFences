@@ -143,6 +143,7 @@ pub fn run() -> std::process::ExitCode {
     let capture_path = options.capture.clone();
     let demo = options.demo.clone();
     let drop_test = options.drop_test.clone();
+    let initial_settings = crate::settings::load();
     install(App {
         host,
         overlay,
@@ -168,7 +169,8 @@ pub fn run() -> std::process::ExitCode {
         rehide_left: 0,
         remove_mode: false,
         hidden: icons::load_hidden(),
-        hotkey: crate::settings::load_hotkey(),
+        hotkey: initial_settings.hotkey,
+        theme: crate::theme::by_key(&initial_settings.theme),
         search: String::new(),
         search_open: false,
         search_anim: None,
@@ -391,6 +393,22 @@ pub fn set_portal_sort(group_index: usize, mode: crate::portals::SortMode) {
     crate::portals::save(&app.portals);
     log::info(&format!("入口「{name}」排序改为 {}", mode.label()));
     rebuild_portal_items();
+    overlay::relayout();
+}
+
+/// 切换配色主题：立刻重画界面，磨砂底色的变化下次唤出生效。
+pub fn set_theme(key: &str) {
+    let theme = crate::theme::by_key(key);
+    let app = state();
+    if app.theme.key == theme.key {
+        return;
+    }
+    app.theme = theme;
+    crate::settings::save(&crate::settings::Settings {
+        hotkey: app.hotkey,
+        theme: theme.key.to_string(),
+    });
+    log::info(&format!("主题切换为「{}」（磨砂底色调下次唤出生效）", theme.name));
     overlay::relayout();
 }
 
@@ -946,8 +964,14 @@ fn change_hotkey() {
             return;
         }
     }
-    state().hotkey = chosen;
-    crate::settings::save_hotkey(chosen);
+    {
+        let app = state();
+        app.hotkey = chosen;
+        crate::settings::save(&crate::settings::Settings {
+            hotkey: chosen,
+            theme: app.theme.key.to_string(),
+        });
+    }
     log::info(&format!("唤出热键已改为 {}", chosen.describe()));
 }
 
@@ -1148,7 +1172,8 @@ fn handle_menu(host: HWND) {
     let exe = std::env::current_exe().unwrap_or_default();
     let autostart_on = crate::autostart::enabled(&exe);
     let hotkey_text = state().hotkey.describe();
-    let command = tray::show_menu(host, autostart_on, &hotkey_text);
+    let theme_key = state().theme.key;
+    let command = tray::show_menu(host, autostart_on, &hotkey_text, theme_key);
     handle_command(command);
 }
 
@@ -1161,6 +1186,12 @@ fn handle_command(command: usize) {
         tray::MENU_HOTKEY => change_hotkey(),
         tray::MENU_ADD_PORTAL => add_portal_from_picker(),
         tray::MENU_EXIT => request_exit(state().host),
+        other if other >= tray::MENU_THEME_BASE => {
+            let index = other - tray::MENU_THEME_BASE;
+            if let Some(theme) = crate::theme::THEMES.get(index) {
+                set_theme(theme.key);
+            }
+        }
         _ => {}
     }
 }

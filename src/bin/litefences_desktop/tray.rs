@@ -22,6 +22,8 @@ pub const MENU_CAPTURE: usize = 1004;
 pub const MENU_AUTOSTART: usize = 1005;
 pub const MENU_HOTKEY: usize = 1006;
 pub const MENU_ADD_PORTAL: usize = 1007;
+/// 主题菜单项的起始编号：`MENU_THEME_BASE + 主题序号`。
+pub const MENU_THEME_BASE: usize = 1100;
 
 /// Explorer 重启后会广播 `TaskbarCreated`，收到后必须重新添加托盘图标。
 pub fn taskbar_created_message() -> u32 {
@@ -88,7 +90,7 @@ pub fn remove(host: HWND) {
 }
 
 /// 弹出右键菜单并返回被选中的命令；0 表示取消。
-pub fn show_menu(host: HWND, autostart_on: bool, hotkey_text: &str) -> usize {
+pub fn show_menu(host: HWND, autostart_on: bool, hotkey_text: &str, theme_key: &str) -> usize {
     let menu = unsafe { CreatePopupMenu() };
     if menu.is_null() {
         return 0;
@@ -117,6 +119,21 @@ pub fn show_menu(host: HWND, autostart_on: bool, hotkey_text: &str) -> usize {
         AppendMenuW(menu, MF_STRING, MENU_HOTKEY, hotkey.as_ptr());
         let add_portal = wide("添加文件夹入口…（只读展示目录内容）");
         AppendMenuW(menu, MF_STRING, MENU_ADD_PORTAL, add_portal.as_ptr());
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+        // 主题：每个预设一项，当前项打勾。
+        let theme_labels: Vec<_> = crate::theme::THEMES
+            .iter()
+            .map(|theme| wide(&format!("主题：{}", theme.name)))
+            .collect();
+        let current = crate::theme::index_of(theme_key);
+        for (index, label) in theme_labels.iter().enumerate() {
+            let flags = if index == current {
+                MF_STRING | MF_CHECKED
+            } else {
+                MF_STRING
+            };
+            AppendMenuW(menu, flags, MENU_THEME_BASE + index, label.as_ptr());
+        }
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(menu, MF_STRING, MENU_CAPTURE, capture.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());

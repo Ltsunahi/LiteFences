@@ -52,6 +52,9 @@ mod portals;
 #[path = "litefences_desktop/settings.rs"]
 mod settings;
 #[cfg(windows)]
+#[path = "litefences_desktop/theme.rs"]
+mod theme;
+#[cfg(windows)]
 #[path = "litefences_desktop/state.rs"]
 mod state;
 #[cfg(windows)]
