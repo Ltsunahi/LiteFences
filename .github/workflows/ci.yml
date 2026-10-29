@@ -1,0 +1,24 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml 里锁了版本，rustup 会自动装好
+      - name: Toolchain
+        run: rustup show
+
+      - name: Build (shell)
+        run: cargo build --release --features shell --locked
+
+      - name: Test (desktop launcher)
+        run: cargo test --release --features shell --locked --bin litefences-desktop
+
+      - name: Build (v1 prototype)
+        run: cargo build --release --locked
