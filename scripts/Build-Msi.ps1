@@ -9,7 +9,9 @@
 param(
     [string]$Version,
     [string]$Exe,
-    [string]$Out
+    [string]$Out,
+    # 安装向导的语言：zh-cn（默认）/ en-us。只影响向导文案，不影响程序本身。
+    [string]$Culture = 'zh-cn'
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -46,6 +48,7 @@ try {
     & $wix build (Join-Path $root 'packaging\LiteFences.wxs') `
         -ext WixToolset.UI.wixext `
         -arch x64 `
+        -culture $Culture `
         -d "SourceDir=$stage" `
         -d "Version=$Version" `
         -d "LicenseRtf=$licenseRtf" `

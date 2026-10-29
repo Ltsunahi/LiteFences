@@ -466,3 +466,15 @@ UI 窗口本身在这个沙箱会话里起不来（msiexec 从非交互上下文
 分组标题、添加格子全部切换）；`cargo test` 11 项通过（新增 i18n 两条：切换、解析）。
 
 已知缺口：MSI 安装向导仍是英文（WiX UI 扩展只带英文资源，中文 wxl 需要整份手工翻译）。
+
+### 补：安装向导中文化
+
+之前向导是英文，原因不是缺资源——`WixToolset.UI.wixext` 的 wixlib 里本来就有 40 种语言，zh-cn 有 561 条文案
+（从扩展 DLL 的嵌入资源 `WixToolset.UI.ui.wixlib` 里解开 `wix-ir.json` 可以查证）。
+问题是构建时没传 `-culture`，WiX 默认走 en-us。
+
+现在 `scripts/Build-Msi.ps1` 加了 `-Culture` 参数（默认 `zh-cn`），产物向导全中文：
+欢迎、许可（MIT）、进度、完成、修复/卸载、错误页；`-Culture en-us` 可出英文向导包。
+
+验证：`wix msi decompile` 检查 —— 「[ProductName] 安装程序」「我接受许可协议中的条款」「上一步(&B)」「安装(&I)」
+「取消」等 128 行中文；静默安装/卸载/重装链路照旧通过。

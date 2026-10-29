@@ -39,7 +39,7 @@
 
 ## 安装
 
-**推荐 MSI**（按用户安装，不需要管理员权限）：双击 `LiteFences-x.y.z-x64.msi` 一路下一步，
+**推荐 MSI**（按用户安装，不需要管理员权限，向导为简体中文）：双击 `LiteFences-x.y.z-x64.msi` 一路下一步，
 装到 `%LOCALAPPDATA%\Programs\LiteFences`，并创建开始菜单 / 桌面快捷方式和卸载项。
 卸载走「设置 → 应用」；`%LOCALAPPDATA%\LiteFencesDesktop` 里的配置不会被删。
 
@@ -59,7 +59,8 @@ cargo build --release --features shell --locked
 打 MSI（WiX v5：`dotnet tool install --global wix --version 5.*`）：
 
 ```powershell
-.\scripts\Build-Msi.ps1     # 版本号取自 Cargo.toml，产物在 dist\
+.\scripts\Build-Msi.ps1              # 版本号取自 Cargo.toml，产物在 dist\
+.\scripts\Build-Msi.ps1 -Culture en-us # 英文安装向导
 ```
 
 ## 使用
