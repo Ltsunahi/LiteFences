@@ -54,13 +54,13 @@
 
 ```powershell
 # 仓库自带离线工具链；target 目录放在工作区可写位置
-$env:CARGO_HOME='E:\note\LiteFences\.tools\cargo'
-$env:RUSTUP_HOME='E:\note\LiteFences\.tools\rustup'
-$env:CARGO_TARGET_DIR='E:\note\.build\target'
+# 如果按 scripts\Setup-Rust.ps1 装了项目自带工具链，先指过去（用系统 Rust 可跳过）
+$env:CARGO_HOME = Join-Path $PWD '.tools\cargo'
+$env:RUSTUP_HOME = Join-Path $PWD '.tools\rustup'
 cargo build --release --features shell --locked --offline
 ```
 
-产物：`E:\note\.build\target\release\litefences-desktop.exe`
+产物：`target\release\litefences-desktop.exe`（离线构建先跑一次联网的 `cargo fetch`，或去掉 `--offline`）
 
 ## 2026-10-18 第二轮修复（用户实测反馈）
 
