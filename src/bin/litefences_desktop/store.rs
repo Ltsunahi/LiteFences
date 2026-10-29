@@ -35,6 +35,9 @@ pub struct Config {
     /// 从面板移除、不再显示的桌面图标。
     #[serde(default)]
     pub hidden: Vec<String>,
+    /// 首次使用引导是否已经看过。
+    #[serde(default)]
+    pub onboarded: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -170,6 +173,16 @@ pub fn save(config: &Config) {
         log::error(&format!("替换 config.json 失败：{error}"));
         let _ = std::fs::remove_file(&temp);
     }
+}
+
+/// 标记「引导已看过」，只改这一个字段，其它配置原样保留。
+pub fn set_onboarded(value: bool) {
+    let mut config = load();
+    if config.onboarded == value {
+        return;
+    }
+    config.onboarded = value;
+    save(&config);
 }
 
 fn has_any_data(config: &Config) -> bool {

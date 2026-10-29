@@ -4,6 +4,8 @@ LiteFences 桌面启动器 · 使用说明
 安装（推荐 MSI）
 ----------------
 1. 双击 `LiteFences-x.y.z-x64.msi`（或右键 → 安装），一路下一步即可。
+   装完第一次打开面板会有一张说明卡（拖动、拖入、收起三句话），点「知道了」或直接关掉，
+   以后不会再出现。
 2. 按用户安装到 `%LOCALAPPDATA%\Programs\LiteFences`，创建：
    - 开始菜单快捷方式「LiteFences」
    - 桌面快捷方式「LiteFences」
@@ -97,13 +99,11 @@ MSI 的安装向导是简体中文（欢迎、许可、进度、完成、修复/
 - 打开 / 隐藏图标面板
 - 开机自启（已开启/已关闭）  ← 点一下切换，只写 HKCU Run 里本项目一个值
 - 设置唤出热键…（当前 Ctrl+Alt+Space）  ← 弹出小窗，直接按下想要的组合键
-- 抓取面板画面（排障）
 - 退出 LiteFences
 
 快捷键
 ------
 Ctrl+Alt+Space   唤出 / 收起（可在托盘菜单里改，存进 config.json 的 settings）
-Ctrl+Alt+F12     抓取当前面板（排障）
 Ctrl+Alt+Q       退出
 Esc              收起
 

@@ -18,7 +18,7 @@ use windows_sys::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    MOD_ALT, MOD_CONTROL, RegisterHotKey, UnregisterHotKey, VK_F12, VK_Q,
+    MOD_ALT, MOD_CONTROL, RegisterHotKey, UnregisterHotKey, VK_Q,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, DestroyWindow, GetMessageW, IDC_ARROW,
@@ -50,7 +50,6 @@ const WM_APP_SCAN: u32 = WM_APP + 2;
 /// 托盘不可用时的兜底入口，也方便键盘用户。
 const HOTKEY_TOGGLE: i32 = 1;
 const HOTKEY_EXIT: i32 = 2;
-const HOTKEY_CAPTURE: i32 = 3;
 
 pub fn run() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -174,6 +173,7 @@ pub fn run() -> std::process::ExitCode {
         hotkey: initial_settings.hotkey,
         theme: crate::theme::by_key(&initial_settings.theme),
         lang_setting: initial_settings.lang.clone(),
+        onboarded: crate::store::load().onboarded,
         search: String::new(),
         search_open: false,
         search_anim: None,
@@ -969,12 +969,9 @@ fn register_hotkeys(host: HWND) {
         if RegisterHotKey(host, HOTKEY_EXIT, MOD_CONTROL | MOD_ALT, u32::from(VK_Q)) == 0 {
             log::warn("注册 Ctrl+Alt+Q 失败（可能被其他程序占用）");
         }
-        if RegisterHotKey(host, HOTKEY_CAPTURE, MOD_CONTROL | MOD_ALT, u32::from(VK_F12)) == 0 {
-            log::warn("注册 Ctrl+Alt+F12 失败（可能被其他程序占用）");
-        }
     }
     log::info(&format!(
-        "快捷键：{} 唤出/收起，Ctrl+Alt+F12 抓取面板，Ctrl+Alt+Q 退出，Esc 收起",
+        "快捷键：{} 唤出/收起，Ctrl+Alt+Q 退出，Esc 收起",
         hotkey.describe()
     ));
 }
@@ -1126,7 +1123,6 @@ unsafe extern "system" fn host_proc(
                     }
                 }
                 HOTKEY_EXIT => request_exit(hwnd),
-                HOTKEY_CAPTURE => start_capture(hwnd),
                 _ => {}
             }
             0
@@ -1255,7 +1251,6 @@ fn handle_command(command: usize) {
     match command {
         tray::MENU_SHOW => overlay::show_panel(),
         tray::MENU_HIDE => overlay::hide_panel(),
-        tray::MENU_CAPTURE => start_capture(state().host),
         tray::MENU_AUTOSTART => toggle_autostart(),
         tray::MENU_HOTKEY => change_hotkey(),
         tray::MENU_ADD_PORTAL => add_portal_from_picker(),
@@ -1330,24 +1325,6 @@ pub fn set_search_text(text: &str) {
 pub fn open_settings_menu() {
     let host = state().host;
     handle_menu(host);
-}
-
-/// 从当前正在运行的实例里抓一张面板画面（排障用）：先抓一张立刻的，再抓一张稳定后的。
-fn start_capture(host: HWND) {
-    let path = log::base_dir().join("panel-capture.bmp");
-    {
-        let app = state();
-        app.options.capture = Some(path.display().to_string());
-        if !app.shown {
-            overlay::show_panel();
-        }
-    }
-    // SAFETY: 句柄有效；两个时间点各抓一张，能看出文字是否“先有后无”。
-    unsafe {
-        SetTimer(host, TIMER_CAPTURE_EARLY, 250, None);
-        SetTimer(host, TIMER_CAPTURE, 1400, None);
-    }
-    log::info(&format!("准备抓取当前面板：{}", path.display()));
 }
 
 /// 排障：把指定路径当成一次真实的外部拖入投给面板，验证拖放注册、路径提取与加引用。

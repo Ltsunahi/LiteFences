@@ -18,7 +18,6 @@ pub const TRAY_CALLBACK: u32 = windows_sys::Win32::UI::WindowsAndMessaging::WM_A
 pub const MENU_SHOW: usize = 1001;
 pub const MENU_HIDE: usize = 1002;
 pub const MENU_EXIT: usize = 1003;
-pub const MENU_CAPTURE: usize = 1004;
 pub const MENU_AUTOSTART: usize = 1005;
 pub const MENU_HOTKEY: usize = 1006;
 pub const MENU_ADD_PORTAL: usize = 1007;
@@ -118,7 +117,6 @@ pub fn show_menu(
     } else {
         format!("设置唤出热键…（当前 {hotkey_text}）")
     });
-    let capture = wide(crate::i18n::t("抓取面板画面（排障）", "Capture panel (diagnostics)"));
     let exit = wide(crate::i18n::t("退出 LiteFences", "Quit LiteFences"));
     // SAFETY: 菜单句柄有效，字符串在调用期间保持存活。
     unsafe {
@@ -172,8 +170,6 @@ pub fn show_menu(
             };
             AppendMenuW(menu, flags, MENU_LANG_BASE + index, label.as_ptr());
         }
-        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-        AppendMenuW(menu, MF_STRING, MENU_CAPTURE, capture.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(menu, MF_STRING, MENU_EXIT, exit.as_ptr());
     }

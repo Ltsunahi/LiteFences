@@ -515,6 +515,12 @@ pub fn hide_panel() {
     if !app.shown {
         return;
     }
+    // 引导卡只出现一次：收起面板就算看过了（点「知道了」只是提前收起）。
+    if !app.onboarded {
+        app.onboarded = true;
+        crate::store::set_onboarded(true);
+        log::info("首次引导已自动收起");
+    }
     // SAFETY: 句柄有效。
     unsafe {
         KillTimer(app.overlay, TIMER_DROP_NOTICE);
@@ -1480,6 +1486,7 @@ fn paint(hwnd: HWND) {
         }
         draw_drop_hover(hdc, app);
         draw_scroll_indicator(hdc, app);
+        draw_onboarding(hdc, app);
         if let Some(header) = app.header_drag
             && header.active
             && let Some(target) = header.target
@@ -1557,6 +1564,139 @@ unsafe fn ensure_buffer(hdc: HDC, width: i32, height: i32) {
             }
         }
     }
+}
+
+/// 首次使用的说明卡：只在没看过时出现，不拦任何操作。
+fn onboarding_rect(app: &crate::state::App) -> RECT {
+    let scale = app.layout.scale;
+    let width = ((560.0 * scale) as i32).min(app.layout.width - (60.0 * scale) as i32);
+    let height = (152.0 * scale) as i32;
+    let hint_band = (34.0 * scale) as i32 + (54.0 * scale) as i32;
+    let bottom = app.layout.height - hint_band;
+    let left = (app.layout.width - width) / 2;
+    RECT {
+        left,
+        top: bottom - height,
+        right: left + width,
+        bottom,
+    }
+}
+
+fn onboarding_button_rect(app: &crate::state::App) -> RECT {
+    let card = onboarding_rect(app);
+    let scale = app.layout.scale;
+    let width = (86.0 * scale) as i32;
+    let height = (28.0 * scale) as i32;
+    let margin = (16.0 * scale) as i32;
+    RECT {
+        left: card.right - width - margin,
+        top: card.bottom - height - (12.0 * scale) as i32,
+        right: card.right - margin,
+        bottom: card.bottom - (12.0 * scale) as i32,
+    }
+}
+
+fn draw_onboarding(hdc: HDC, app: &crate::state::App) {
+    if app.onboarded {
+        return;
+    }
+    let card = onboarding_rect(app);
+    let scale = app.layout.scale;
+    let theme = app.theme;
+    // SAFETY: 画刷/字体用完即释放，DC 由 paint 提供。
+    unsafe {
+        let brush = CreateSolidBrush(theme.bar);
+        FillRect(hdc, &card, brush);
+        DeleteObject(brush as _);
+        draw_outline(hdc, card, scale, theme.accent);
+        SetBkMode(hdc, TRANSPARENT as i32);
+        let mut title = RECT {
+            left: card.left + (18.0 * scale) as i32,
+            top: card.top + (12.0 * scale) as i32,
+            right: card.right - (18.0 * scale) as i32,
+            bottom: card.top + (40.0 * scale) as i32,
+        };
+        SetTextColor(hdc, theme.text);
+        let text = wide(crate::i18n::t(
+            "欢迎使用 LiteFences",
+            "Welcome to LiteFences",
+        ));
+        DrawTextW(
+            hdc,
+            text.as_ptr(),
+            -1,
+            &mut title,
+            DT_LEFT | DT_SINGLELINE | DT_NOPREFIX,
+        );
+        let font = create_font(scale, 13.0);
+        let previous = if font.is_null() {
+            std::ptr::null_mut()
+        } else {
+            SelectObject(hdc, font as _)
+        };
+        SetTextColor(hdc, theme.text_dim);
+        let lines = [
+            crate::i18n::t(
+                "拖动图标换位置，按住分组标题可调整分组顺序",
+                "Drag icons to reorder; drag a group title to move the group",
+            ),
+            crate::i18n::t(
+                "从资源管理器拖文件到面板即可加入（只记录路径）",
+                "Drop files from Explorer to add them (paths only)",
+            ),
+            crate::i18n::t(
+                "单击空白处或按 Esc 收起面板",
+                "Click empty space or press Esc to close",
+            ),
+        ];
+        let mut y = card.top + (42.0 * scale) as i32;
+        for line in lines {
+            let mut rect = RECT {
+                left: card.left + (18.0 * scale) as i32,
+                top: y,
+                right: card.right - (18.0 * scale) as i32,
+                bottom: y + (20.0 * scale) as i32,
+            };
+            let line = wide(&format!("· {line}"));
+            DrawTextW(
+                hdc,
+                line.as_ptr(),
+                -1,
+                &mut rect,
+                DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
+            );
+            y += (21.0 * scale) as i32;
+        }
+        if !previous.is_null() {
+            SelectObject(hdc, previous);
+        }
+        if !font.is_null() {
+            DeleteObject(font as _);
+        }
+        draw_chip(
+            hdc,
+            onboarding_button_rect(app),
+            crate::i18n::t("知道了", "Got it"),
+            theme.accent,
+            theme.bar,
+            scale,
+        );
+    }
+}
+
+fn dismiss_onboarding() {
+    let app = state();
+    if app.onboarded {
+        return;
+    }
+    app.onboarded = true;
+    crate::store::set_onboarded(true);
+    // SAFETY: 句柄有效。
+    unsafe {
+        InvalidateRect(app.overlay, std::ptr::null(), 0);
+        UpdateWindow(app.overlay);
+    }
+    log::info("首次引导已关闭");
 }
 
 /// 画“静态帧”：底板 + 图标 + 文字。只在内容变化时调用。
@@ -3082,6 +3222,15 @@ unsafe extern "system" fn overlay_proc(
             if !within_cooldown() && !animating() {
                 let (x, y) = mouse_xy(lparam);
                 let point = POINT { x, y };
+                if !state().onboarded {
+                    // 点「知道了」只是收卡片；点别处照常执行，同时把卡片收掉。
+                    let button = onboarding_button_rect(state());
+                    let in_button = unsafe { PtInRect(&button, point) != 0 };
+                    dismiss_onboarding();
+                    if in_button {
+                        return 0;
+                    }
+                }
                 let (in_settings, in_new_group, in_chip, in_search) = unsafe {
                     let app = state();
                     (

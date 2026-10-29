@@ -212,6 +212,8 @@ pub struct App {
     pub theme: &'static crate::theme::Theme,
     /// 语言设置原值：`auto` / `zh` / `en`（保存时原样写回）。
     pub lang_setting: String,
+    /// 首次使用引导是否已经看过（没看过时面板上多一张说明卡）。
+    pub onboarded: bool,
     /// 搜索关键字（空 = 不过滤）。
     pub search: String,
     /// 搜索栏是否展开。
