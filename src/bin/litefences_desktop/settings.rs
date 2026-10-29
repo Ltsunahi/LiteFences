@@ -1,7 +1,5 @@
 //! 设置持久化：唤出热键 + 配色主题。
 
-use std::path::PathBuf;
-
 use crate::log;
 
 pub const MOD_ALT: u32 = 0x0001;
@@ -65,10 +63,6 @@ fn key_name(key: u32) -> String {
     }
 }
 
-fn settings_path() -> PathBuf {
-    log::base_dir().join("settings.txt")
-}
-
 /// 全部设置。字段少，直接整份读整份写，避免改一项冲掉另一项。
 #[derive(Clone, Debug)]
 pub struct Settings {
@@ -89,57 +83,37 @@ impl Default for Settings {
 }
 
 pub fn load() -> Settings {
+    let section = crate::store::load().settings;
     let mut settings = Settings::default();
-    let Ok(text) = std::fs::read_to_string(settings_path()) else {
-        return settings;
+    let hotkey = Hotkey {
+        modifiers: section.hotkey_modifiers,
+        key: section.hotkey_key,
     };
-    for line in text.lines() {
-        if let Some(value) = line.trim().strip_prefix("lang=") {
-            let value = value.trim();
-            if !value.is_empty() {
-                settings.lang = value.to_string();
-            }
-            continue;
-        }
-        if let Some(value) = line.trim().strip_prefix("theme=") {
-            let value = value.trim();
-            if !value.is_empty() {
-                settings.theme = value.to_string();
-            }
-            continue;
-        }
-        let Some(value) = line.trim().strip_prefix("hotkey=") else {
-            continue;
-        };
-        let Some((modifiers, key)) = value.split_once(',') else {
-            continue;
-        };
-        if let (Ok(modifiers), Ok(key)) = (modifiers.trim().parse(), key.trim().parse()) {
-            let hotkey = Hotkey { modifiers, key };
-            if hotkey.modifiers != 0 && hotkey.key != 0 {
-                settings.hotkey = hotkey;
-            }
-        }
+    if hotkey.modifiers != 0 && hotkey.key != 0 {
+        settings.hotkey = hotkey;
+    }
+    if !section.theme.trim().is_empty() {
+        settings.theme = section.theme;
+    }
+    if !section.lang.trim().is_empty() {
+        settings.lang = section.lang;
     }
     settings
 }
 
 pub fn save(settings: &Settings) {
-    let path = settings_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let text = format!(
-        "# LiteFences 设置\nhotkey={},{}\ntheme={}\nlang={}\n",
-        settings.hotkey.modifiers, settings.hotkey.key, settings.theme, settings.lang
-    );
-    if let Err(error) = std::fs::write(&path, text) {
-        log::error(&format!("保存设置失败：{error}"));
-    } else {
-        log::info(&format!(
-            "已保存设置：热键 {}，主题 {}",
-            settings.hotkey.describe(),
-            settings.theme
-        ));
-    }
+    let mut config = crate::store::load();
+    config.settings = crate::store::SettingsSection {
+        hotkey_modifiers: settings.hotkey.modifiers,
+        hotkey_key: settings.hotkey.key,
+        theme: settings.theme.clone(),
+        lang: settings.lang.clone(),
+    };
+    crate::store::save(&config);
+    log::info(&format!(
+        "已保存设置：热键 {}，主题 {}，语言 {}",
+        settings.hotkey.describe(),
+        settings.theme,
+        settings.lang
+    ));
 }

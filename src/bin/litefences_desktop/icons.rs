@@ -350,39 +350,24 @@ pub fn make_custom_item(path: PathBuf) -> DesktopItem {
     }
 }
 
-/// 手动图标列表的存放位置。
-fn custom_list_path() -> PathBuf {
-    crate::log::base_dir().join("custom-icons.txt")
-}
-
-/// 读取手动添加的图标路径（每行一个）。
+/// 读取手动添加的图标路径。
 pub fn load_custom() -> Vec<PathBuf> {
-    let path = custom_list_path();
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Vec::new();
-    };
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
+    crate::store::load()
+        .custom
+        .into_iter()
         .map(PathBuf::from)
         .filter(|path| path.exists())
         .collect()
 }
 
-/// 保存手动添加的图标路径；失败只记日志，不影响面板使用。
+/// 保存手动添加的图标路径。
 pub fn save_custom(paths: &[PathBuf]) {
-    let path = custom_list_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut text = String::new();
-    for item in paths {
-        text.push_str(&item.to_string_lossy());
-        text.push('\n');
-    }
-    if let Err(error) = std::fs::write(&path, text) {
-        log::error(&format!("保存手动图标列表失败：{error}"));
-    }
+    let mut config = crate::store::load();
+    config.custom = paths
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+    crate::store::save(&config);
 }
 
 /// 路径比较：Windows 下大小写不敏感。
@@ -390,95 +375,60 @@ pub fn same_path(a: &Path, b: &Path) -> bool {
     a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
 }
 
-/// 被手动隐藏的桌面图标（移除后不再显示）。
-fn hidden_path() -> PathBuf {
-    crate::log::base_dir().join("hidden-icons.txt")
-}
-
 pub fn load_hidden() -> Vec<PathBuf> {
-    let Ok(text) = std::fs::read_to_string(hidden_path()) else {
-        return Vec::new();
-    };
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    crate::store::load()
+        .hidden
+        .into_iter()
         .map(PathBuf::from)
         .collect()
 }
 
 pub fn save_hidden(paths: &[PathBuf]) {
-    let path = hidden_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut text = String::from("# 被面板隐藏的图标，一行一个路径；删掉某行即可恢复显示\n");
-    for item in paths {
-        text.push_str(&item.to_string_lossy());
-        text.push('\n');
-    }
-    if let Err(error) = std::fs::write(&path, text) {
-        log::error(&format!("保存隐藏列表失败：{error}"));
-    }
+    let mut config = crate::store::load();
+    config.hidden = paths
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+    crate::store::save(&config);
 }
 
-/// 面板布局文件的存放位置（顺序 + 显示名）。
-fn layout_path() -> PathBuf {
-    crate::log::base_dir().join("layout.txt")
-}
-
-/// 读取布局：每行「路径 <TAB> 显示名」，顺序即面板顺序。
+/// 读取布局：顺序即面板顺序，名字与图标在同一个条目里。
 pub fn load_order() -> Vec<(PathBuf, String)> {
-    let Ok(text) = std::fs::read_to_string(layout_path()) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
-        .map(|line| match line.split_once('\t') {
-            Some((path, name)) => (PathBuf::from(path), name.to_string()),
-            None => (PathBuf::from(line), String::new()),
-        })
+    crate::store::load()
+        .items
+        .into_iter()
+        .map(|entry| (PathBuf::from(entry.path), entry.name))
         .collect()
 }
 
-/// 保存布局；失败只记日志。第三列是可选的图标文件路径。
+/// 保存布局：路径 + 显示名 + 可选自定义图标。
 pub fn save_order(items: &[DesktopItem]) {
-    let path = layout_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut text =
-        String::from("# LiteFences 面板布局 v1：每行「路径<TAB>显示名[<TAB>图标文件]」，行序即面板顺序\n");
-    for item in items {
-        text.push_str(&item.path.to_string_lossy());
-        text.push('\t');
-        text.push_str(&item.name);
-        if let Some(icon) = item.custom_icon.as_ref() {
-            text.push('\t');
-            text.push_str(&icon.to_string_lossy());
-        }
-        text.push('\n');
-    }
-    if let Err(error) = std::fs::write(&path, text) {
-        log::error(&format!("保存面板布局失败：{error}"));
-    }
+    let mut config = crate::store::load();
+    config.items = items
+        .iter()
+        .map(|item| crate::store::ItemEntry {
+            path: item.path.to_string_lossy().to_string(),
+            name: item.name.clone(),
+            icon: item
+                .custom_icon
+                .as_ref()
+                .map(|icon| icon.to_string_lossy().to_string()),
+        })
+        .collect();
+    crate::store::save(&config);
 }
 
-/// 从 layout.txt 里读出「路径 → 自定义图标」的对应关系。
+/// 「路径 → 自定义图标」的对应关系。
 pub fn load_custom_icons() -> Vec<(PathBuf, PathBuf)> {
-    let Ok(text) = std::fs::read_to_string(layout_path()) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
-        .filter_map(|line| {
-            let mut parts = line.split('\t');
-            let path = parts.next()?;
-            let _name = parts.next()?;
-            let icon = parts.next()?;
+    crate::store::load()
+        .items
+        .into_iter()
+        .filter_map(|entry| {
+            let icon = entry.icon?;
             if icon.trim().is_empty() {
                 return None;
             }
-            Some((PathBuf::from(path), PathBuf::from(icon.trim())))
+            Some((PathBuf::from(entry.path), PathBuf::from(icon)))
         })
         .collect()
 }

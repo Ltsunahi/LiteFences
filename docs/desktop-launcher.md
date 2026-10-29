@@ -478,3 +478,28 @@ UI 窗口本身在这个沙箱会话里起不来（msiexec 从非交互上下文
 
 验证：`wix msi decompile` 检查 —— 「[ProductName] 安装程序」「我接受许可协议中的条款」「上一步(&B)」「安装(&I)」
 「取消」等 128 行中文；静默安装/卸载/重装链路照旧通过。
+
+## 2026-10-29（第五轮）：配置改成 JSON
+
+原来 6 个 tab 分隔的 txt（layout/groups/portals/settings/custom-icons/hidden-icons）各自读各自写，
+没有结构、没有版本号、写入不是原子操作。现在统一成一个 `config.json`：
+
+| 之前 | 现在 |
+| --- | --- |
+| `layout.txt` | `config.items[]`：`path` / `name` / `icon` |
+| `groups.txt` | `config.groups[]`：`name` / `collapsed` / `paths[]` |
+| `portals.txt` | `config.portals[]`：`dir` / `name` / `collapsed` / `sort` |
+| `settings.txt` | `config.settings`：热键 / 主题 / 语言 |
+| `custom-icons.txt` | `config.custom[]` |
+| `hidden-icons.txt` | `config.hidden[]` |
+
+实现要点（`src/bin/litefences_desktop/store.rs`）：
+
+- `version` 字段留给以后写迁移；所有字段 `#[serde(default)]`，加字段不会把旧配置读崩；
+- **原子写入**：先写 `config.json.tmp` 再 `rename`，旧文件同时复制成 `config.json.bak`；
+- 解析失败不改写原文件：备份成 `config.broken.json`，退回默认配置并记日志，程序照常能用；
+- 旧 txt 只在首次启动读一次，迁移成功后改名 `*.migrated` 留底。
+
+验证：把真实数据目录复制一份跑迁移 —— `config.json` 10916 字节、83 条 items、2 个分组、1 条 hidden，
+自检 `failures=0`；再跑第二次（只剩 config.json）仍然 `items=82`、分组 2、`failures=0`。
+`cargo test` 13 项通过（新增 store 两条：序列化往返、缺字段回退）。

@@ -70,28 +70,27 @@ MSI 的安装向导是简体中文（欢迎、许可、进度、完成、修复/
   选完文件后新图标直接出现在网格末尾。
 - 移除：点右上角「移除」开关（变红显示“移除中”），然后**单击任意图标**即从面板移除；
   再点一次开关或按 Esc 退出移除模式。
-  手动图标会从 custom-icons.txt 删除；桌面图标会记到 hidden-icons.txt（桌面上的文件不动）。
-  想恢复被隐藏的桌面图标：删掉 hidden-icons.txt 里对应行，重启程序即可。
-- 手动图标列表存在 %LOCALAPPDATA%\LiteFencesDesktop\custom-icons.txt（一行一个路径）。
-- 面板顺序和显示名存在 %LOCALAPPDATA%\LiteFencesDesktop\layout.txt
-  （每行「路径<TAB>显示名」，行序即顺序，可直接编辑）。
+  手动图标会从配置里的 custom 列表删除；桌面图标会记到 hidden 列表（桌面上的文件不动）。
+  想恢复被隐藏的桌面图标：从 config.json 的 hidden 里删掉对应路径，重启程序即可。
+- 配置统一存在 %LOCALAPPDATA%\LiteFencesDesktop\config.json：
+  custom（手动添加的图标）、items（面板顺序 + 显示名 + 自定义图标）。
 
 分组
 ----
 - 面板按分组分节显示，每组一行标题（箭头 + 组名 + 图标数量）。
 - 点标题行**任意位置** → 折叠 / 展开该组，状态自动保存（以前只有左边「箭头 + 组名」能点）。
-- 按住标题行上下拖 → 调整分组顺序，会有一条蓝色插入线指示落点，顺序保存在 groups.txt。
+- 按住标题行上下拖 → 调整分组顺序，会有一条蓝色插入线指示落点，顺序写进 config.json。
 - 右键任意图标 → 菜单里选「移到『某组』」，或「新建分组并移入…」（填个名字即可）。
 - 更快的做法：**把图标直接拖到某个组的标题行上松手**，标题会先高亮，松手即移入。
 - 右键分组标题 → 「重命名分组…」「折叠/展开该组」「删除分组（图标回到『其它』）」。
 - 没有归组的图标自动落在最后的「其它」组；添加按钮也在这个组末尾。
-- 分组数据存在 %LOCALAPPDATA%\LiteFencesDesktop\groups.txt：
-      [开发]
-      C:\Users\你\Desktop\Visual Studio Code.lnk
-      [游戏]
-      C:\Users\你\Desktop\Steam.lnk
-      [!其它]          ← 组名前面加 ! 表示默认折叠
-  直接手改这个文件也行，改完重启程序生效。
+- 分组数据在 config.json 的 groups 里，长这样：
+      "groups": [
+        { "name": "开发", "collapsed": false, "paths": ["C:\\...\\Code.lnk"] },
+        { "name": "其它", "collapsed": true,  "paths": [] }
+      ]
+  JSON 可以直接手改（注意转义反斜杠），改完重启程序生效；改坏了程序会自动备份成
+  config.broken.json 并回到默认配置，不会打不开。
 
 托盘菜单
 --------
@@ -103,7 +102,7 @@ MSI 的安装向导是简体中文（欢迎、许可、进度、完成、修复/
 
 快捷键
 ------
-Ctrl+Alt+Space   唤出 / 收起（可在托盘菜单里改，存进 settings.txt）
+Ctrl+Alt+Space   唤出 / 收起（可在托盘菜单里改，存进 config.json 的 settings）
 Ctrl+Alt+F12     抓取当前面板（排障）
 Ctrl+Alt+Q       退出
 Esc              收起
@@ -119,16 +118,17 @@ Esc              收起
 
 数据与日志
 ----------
+%LOCALAPPDATA%\LiteFencesDesktop\config.json        全部配置（JSON，带 version 字段）
+%LOCALAPPDATA%\LiteFencesDesktop\config.json.bak    上一次保存前的备份
 %LOCALAPPDATA%\LiteFencesDesktop\launcher.log        运行日志（最大 512 KB）
-%LOCALAPPDATA%\LiteFencesDesktop\layout.txt          面板顺序与显示名
-%LOCALAPPDATA%\LiteFencesDesktop\custom-icons.txt    手动添加的图标
-%LOCALAPPDATA%\LiteFencesDesktop\hidden-icons.txt    被移除的桌面图标
-%LOCALAPPDATA%\LiteFencesDesktop\settings.txt        唤出热键等设置
 %LOCALAPPDATA%\LiteFencesDesktop\icons-hidden.flag   面板显示期间存在；残留时下次启动自动恢复桌面图标
+
+旧版本的 layout.txt / groups.txt / portals.txt / settings.txt / custom-icons.txt / hidden-icons.txt
+会在首次启动时自动迁移进 config.json，原文件改名成 *.migrated 留底。
 
 当前进度：M1（形态版）+ M2（分组容器、外部拖入）已完成，正在做稳定性（M3）。
 自定义图标
 ----------
 - 右键图标 →「更换图标…」→ 选一个 .ico 文件；面板上就用它显示（不动源文件）。
 - 右键 →「恢复默认图标」可以还原。
-- 记录写在 layout.txt 第三列：路径<TAB>显示名<TAB>图标文件路径。
+- 记录写在 config.json 的 items 里（icon 字段）。

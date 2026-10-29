@@ -4,7 +4,6 @@
 use std::path::{Path, PathBuf};
 
 use crate::icons;
-use crate::log;
 
 #[derive(Clone, Debug)]
 pub struct Group {
@@ -26,10 +25,6 @@ impl Group {
     }
 }
 
-fn groups_path() -> PathBuf {
-    log::base_dir().join("groups.txt")
-}
-
 pub const DEFAULT_GROUP: &str = "其它";
 
 /// 界面上显示的分组名：默认组在英文界面显示 "Others"（文件里仍然存「其它」，不动数据）。
@@ -42,67 +37,35 @@ pub fn display_name(name: &str) -> String {
 }
 
 pub fn load() -> Vec<Group> {
-    let Ok(text) = std::fs::read_to_string(groups_path()) else {
-        return Vec::new();
-    };
-    let mut groups: Vec<Group> = Vec::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if let Some(inner) = trimmed.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
-            let (collapsed, name) = match inner.strip_prefix('!') {
-                Some(name) => (true, name.trim().to_string()),
-                None => (false, inner.trim().to_string()),
-            };
-            if name.is_empty() {
-                continue;
-            }
-            if let Some(existing) = groups.iter_mut().find(|group| group.name == name) {
-                existing.collapsed = collapsed;
-            } else {
-                groups.push(Group {
-                    name,
-                    collapsed,
-                    paths: Vec::new(),
-                    portal: None,
-                });
-            }
-            continue;
-        }
-        let Some(group) = groups.last_mut() else {
-            continue;
-        };
-        group.paths.push(PathBuf::from(trimmed));
-    }
-    groups
+    crate::store::load()
+        .groups
+        .into_iter()
+        .map(|entry| Group {
+            name: entry.name,
+            collapsed: entry.collapsed,
+            paths: entry.paths.into_iter().map(PathBuf::from).collect(),
+            portal: None,
+        })
+        .collect()
 }
 
 pub fn save(groups: &[Group]) {
-    let path = groups_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut text = String::from("# LiteFences 分组 v1：`[组名]` 开新组，`[!组名]` 表示默认折叠；组内每行一个路径\n");
-    for group in groups {
-        // 入口是只读视图，不写进 groups.txt（它由 portals.txt 持久化）。
-        if group.portal.is_some() {
-            continue;
-        }
-        if group.collapsed {
-            text.push_str(&format!("[!{}]\n", group.name));
-        } else {
-            text.push_str(&format!("[{}]\n", group.name));
-        }
-        for item in &group.paths {
-            text.push_str(&item.to_string_lossy());
-            text.push('\n');
-        }
-    }
-    if let Err(error) = std::fs::write(&path, text) {
-        log::error(&format!("保存分组失败：{error}"));
-    }
+    let mut config = crate::store::load();
+    // 入口是只读视图，不写进分组（它由 portals 持久化）。
+    config.groups = groups
+        .iter()
+        .filter(|group| group.portal.is_none())
+        .map(|group| crate::store::GroupEntry {
+            name: group.name.clone(),
+            collapsed: group.collapsed,
+            paths: group
+                .paths
+                .iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect(),
+        })
+        .collect();
+    crate::store::save(&config);
 }
 
 /// 保证至少有一个“其它”组，用来接住未归组的图标。

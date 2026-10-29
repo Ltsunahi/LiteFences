@@ -61,6 +61,9 @@ mod theme;
 #[path = "litefences_desktop/state.rs"]
 mod state;
 #[cfg(windows)]
+#[path = "litefences_desktop/store.rs"]
+mod store;
+#[cfg(windows)]
 #[path = "litefences_desktop/text_input.rs"]
 mod text_input;
 #[cfg(windows)]

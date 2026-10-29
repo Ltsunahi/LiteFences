@@ -62,76 +62,46 @@ pub struct FolderPortal {
     pub sort: SortMode,
 }
 
-fn file_path() -> PathBuf {
-    crate::log::base_dir().join("portals.txt")
-}
-
 pub fn load() -> Vec<FolderPortal> {
-    let Ok(text) = std::fs::read_to_string(file_path()) else {
-        return Vec::new();
-    };
-    let mut portals = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let mut parts = line.splitn(4, '\t');
-        let Some(dir) = parts.next() else {
-            continue;
-        };
-        let dir_path = PathBuf::from(dir);
-        if !dir_path.is_dir() {
-            log::warn(&format!("入口目录不存在，跳过：{dir}"));
-            continue;
-        }
-        let name = parts
-            .next()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| {
+    crate::store::load()
+        .portals
+        .into_iter()
+        .filter_map(|entry| {
+            let dir_path = PathBuf::from(&entry.dir);
+            if !dir_path.is_dir() {
+                log::warn(&format!("入口目录不存在，跳过：{}", entry.dir));
+                return None;
+            }
+            let name = if entry.name.trim().is_empty() {
                 dir_path
                     .file_name()
                     .map(|name| name.to_string_lossy().to_string())
                     .unwrap_or_else(|| dir_path.display().to_string())
-            });
-        let collapsed = parts.next().is_some_and(|value| value.trim() == "1");
-        let sort = parts
-            .next()
-            .and_then(SortMode::parse)
-            .unwrap_or(SortMode::FolderFirst);
-        portals.push(FolderPortal {
-            dir: dir_path,
-            name,
-            collapsed,
-            sort,
-        });
-    }
-    portals
+            } else {
+                entry.name.trim().to_string()
+            };
+            Some(FolderPortal {
+                dir: dir_path,
+                name,
+                collapsed: entry.collapsed,
+                sort: SortMode::parse(&entry.sort).unwrap_or(SortMode::FolderFirst),
+            })
+        })
+        .collect()
 }
 
 pub fn save(portals: &[FolderPortal]) {
-    let path = file_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut text = String::from(
-        "# LiteFences 文件夹入口 v1：每行「目录<TAB>显示名<TAB>collapsed<TAB>sort」\n\
-         # sort：folder（文件夹在前，默认）/ name / time\n",
-    );
-    for portal in portals {
-        text.push_str(&format!(
-            "{}\t{}\t{}\t{}\n",
-            portal.dir.display(),
-            portal.name,
-            if portal.collapsed { 1 } else { 0 },
-            portal.sort.as_str()
-        ));
-    }
-    if let Err(error) = std::fs::write(&path, text) {
-        log::error(&format!("保存文件夹入口失败：{error}"));
-    }
+    let mut config = crate::store::load();
+    config.portals = portals
+        .iter()
+        .map(|portal| crate::store::PortalEntry {
+            dir: portal.dir.to_string_lossy().to_string(),
+            name: portal.name.clone(),
+            collapsed: portal.collapsed,
+            sort: portal.sort.as_str().to_string(),
+        })
+        .collect();
+    crate::store::save(&config);
 }
 
 /// 目录里的一项，排序用。

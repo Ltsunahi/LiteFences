@@ -30,6 +30,8 @@ shell = [
     "windows-sys/Win32_UI_Controls",
     "windows-sys/Win32_Graphics_Dwm",
     "windows-sys/Win32_Globalization",
+    "dep:serde",
+    "dep:serde_json",
     "windows-sys/Win32_System_Threading",
     "windows-sys/Win32_System_SystemInformation",
     "windows-sys/Win32_Security",

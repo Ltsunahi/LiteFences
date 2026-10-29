@@ -75,17 +75,18 @@ cargo build --release --features shell --locked
 
 ## 数据文件
 
-全部在 `%LOCALAPPDATA%\LiteFencesDesktop\`，都是纯文本，可以直接编辑：
+全部在 `%LOCALAPPDATA%\LiteFencesDesktop\`：
 
 | 文件 | 内容 |
 | --- | --- |
-| `layout.txt` | 面板顺序与显示名：`路径<TAB>显示名[<TAB>图标文件]` |
-| `groups.txt` | 分组：`[组名]` 分段，`[!组名]` 表示默认折叠 |
-| `portals.txt` | 文件夹入口：`目录<TAB>显示名<TAB>折叠<TAB>排序` |
-| `custom-icons.txt` | 手动添加的图标路径 |
-| `hidden-icons.txt` | 从面板移除的桌面图标 |
-| `settings.txt` | 热键与主题 |
+| `config.json` | **全部配置**：`version` + `settings`（热键/主题/语言）+ `items`（顺序、显示名、图标）+ `groups` + `portals` + `custom` + `hidden` |
+| `config.json.bak` | 上一次保存前的备份 |
+| `config.broken.json` | 解析失败时自动备份的坏文件（正常不会有） |
 | `launcher.log` | 运行日志（512 KiB 轮换） |
+
+写入是**先写临时文件再改名**的原子替换，断电不会留下半截配置；解析失败会备份坏文件并退回默认配置，
+不会让程序打不开。旧版本的 `layout.txt` / `groups.txt` / `portals.txt` / `settings.txt` 等会在首次启动时
+自动迁移进 `config.json`，原文件改名成 `*.migrated` 留底。
 
 ## 已知限制
 
