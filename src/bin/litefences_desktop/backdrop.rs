@@ -5,15 +5,88 @@
 
 use windows_sys::Win32::Foundation::RECT;
 use windows_sys::Win32::Graphics::Gdi::{
-    AC_SRC_OVER, AlphaBlend, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, CreateCompatibleDC,
-    CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HALFTONE, HDC, ReleaseDC,
-    SRCCOPY, SelectObject, SetStretchBltMode, StretchBlt,
+    AC_SRC_OVER, AlphaBlend, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, BitBlt,
+    CAPTUREBLT, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
+    DeleteDC, DeleteObject, GetDC, HALFTONE, HDC, ReleaseDC, SRCCOPY, SelectObject,
+    SetStretchBltMode, StretchBlt,
 };
 
 /// 缩小倍数：越大越省事，模糊越“糊”。
 const DOWNSCALE: i32 = 10;
 /// 模糊半径（在小图上做）。
 const BLUR_RADIUS: i32 = 2;
+
+/// 唤出瞬间的整屏原图。入场动画每帧先贴它当底，再按不透明度叠面板：
+/// 既不会第一帧先黑一下（窗口新建时表面是空的），淡入也不会一帧帧叠加跑偏。
+pub struct ScreenBase {
+    dc: HDC,
+    bitmap: isize,
+    width: i32,
+    height: i32,
+}
+
+impl ScreenBase {
+    pub fn capture(area: RECT) -> Option<Self> {
+        let width = area.right - area.left;
+        let height = area.bottom - area.top;
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        // SAFETY: 所有 GDI 对象在函数内成对获取/释放。
+        unsafe {
+            let screen = GetDC(std::ptr::null_mut());
+            if screen.is_null() {
+                return None;
+            }
+            let dc = CreateCompatibleDC(screen);
+            let bitmap = CreateCompatibleBitmap(screen, width, height);
+            if dc.is_null() || bitmap.is_null() {
+                if !dc.is_null() {
+                    DeleteDC(dc);
+                }
+                if !bitmap.is_null() {
+                    DeleteObject(bitmap as _);
+                }
+                ReleaseDC(std::ptr::null_mut(), screen);
+                return None;
+            }
+            let previous = SelectObject(dc, bitmap as _);
+            BitBlt(
+                dc, 0, 0, width, height, screen, area.left, area.top, SRCCOPY | CAPTUREBLT,
+            );
+            SelectObject(dc, previous);
+            ReleaseDC(std::ptr::null_mut(), screen);
+            Some(Self {
+                dc,
+                bitmap: bitmap as isize,
+                width,
+                height,
+            })
+        }
+    }
+
+    /// 原样贴回窗口，作为这一帧的底。
+    pub fn blit(&self, hdc: HDC) {
+        // SAFETY: 两个 DC 都有效；尺寸来自创建时的屏幕区域。
+        unsafe {
+            BitBlt(hdc, 0, 0, self.width, self.height, self.dc, 0, 0, SRCCOPY);
+        }
+    }
+}
+
+impl Drop for ScreenBase {
+    fn drop(&mut self) {
+        // SAFETY: 位图与 DC 由本结构独占，只释放一次。
+        unsafe {
+            if !self.dc.is_null() {
+                DeleteDC(self.dc);
+            }
+            if self.bitmap != 0 {
+                DeleteObject(self.bitmap as _);
+            }
+        }
+    }
+}
 
 pub struct Backdrop {
     bitmap: isize,

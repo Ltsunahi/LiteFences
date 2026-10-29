@@ -319,6 +319,9 @@ pub fn show_panel() {
     if app.options.hide_desktop_icons && !app.icons_hidden {
         app.icons_hidden = desktop_icons::set_visible(false);
     }
+    // 藏完桌面图标再抓整屏原图：动画的底色里不该有桌面图标，
+    // 否则淡入时“桌面图标 + 面板图标”会短暂叠在一起，看起来像闪。
+    app.entrance = crate::backdrop::ScreenBase::capture(area);
 
     // 只有桌面内容变化时才重新扫描；扫描在后台线程进行，不阻塞消息循环。
     let stamp = icons::desktop_stamp();
@@ -379,6 +382,7 @@ pub fn show_panel() {
     }
     let anim_start = Instant::now();
     app.anim_started = Some(anim_start);
+    app.anim_frames = 0;
     app.anim_alpha = 0.0;
     // 先把静态帧画进缓存，避免动画第一帧里再做一次整屏重绘（会卡一下）。
     // SAFETY: 句柄有效；GetDC/ReleaseDC 成对，缓存与窗口同尺寸。
@@ -447,7 +451,6 @@ pub fn show_panel() {
     {
         let app = state();
         app.anim_started = None;
-        app.anim_alpha = 1.0;
         // 动画期间工具条画进了缓存；收尾重画一版不含工具条的静态帧。
         app.static_dirty = true;
     }
@@ -576,6 +579,7 @@ fn free_caches() {
     app.buffer_height = 0;
     app.font_scale = 0.0;
     app.backdrop = None;
+    app.entrance = None;
     app.scroll = 0;
     app.static_dirty = true;
 }
@@ -1353,8 +1357,17 @@ fn paint(hwnd: HWND) {
                 let frame_started = Instant::now();
                 // 入场动画只做淡入，**不做缩放**：缩放版每帧要重采样整屏，实测一帧 39ms，
                 // 240ms 的动画直接掉到 20fps。1:1 叠加是几毫秒的量级，才可能流畅。
+                // 第一帧先把唤出瞬间的整屏原图贴上去：窗口新建时表面是空的，
+                // 不垫这一下会先黑一帧（看起来就是“闪一下”）。只贴一次，之后靠叠加，
+                // 每帧都贴原图会多花一次整屏拷贝（实测帧率从 25 帧掉到 12 帧）。
+                if app.anim_frames == 0
+                    && let Some(base) = app.entrance.as_ref()
+                {
+                    base.blit(hdc);
+                }
+                app.anim_frames = app.anim_frames.saturating_add(1);
                 let target = anim_progress();
-                // 每帧都叠在“上一帧的结果”上，所以按目标值反算增量，保证整体曲线不跑偏。
+                // 每帧叠在“上一帧结果”上，按目标值反算增量，整体曲线才不跑偏。
                 let current = app.anim_alpha.clamp(0.0, 0.999);
                 let step = ((target - current) / (1.0 - current)).clamp(0.0, 1.0);
                 app.anim_alpha = target;

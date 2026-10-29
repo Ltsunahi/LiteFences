@@ -172,7 +172,11 @@ pub struct App {
     pub shown_at: Option<Instant>,
     /// 入场动画计时起点；None 表示动画已结束。
     pub anim_started: Option<Instant>,
-    /// 入场动画当前已经叠上去的不透明度（0..1），用来精确计算下一帧的增量。
+    /// 唤出瞬间的整屏原图，入场动画第一帧拿它当底（收起后释放）。
+    pub entrance: Option<crate::backdrop::ScreenBase>,
+    /// 入场动画已画过的帧数（0 = 还没画）。
+    pub anim_frames: u32,
+    /// 当前已经叠到窗口上的不透明度，用来按目标值反算每帧增量。
     pub anim_alpha: f32,
     pub icons_hidden: bool,
     pub items: Vec<DesktopItem>,
