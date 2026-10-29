@@ -8,18 +8,18 @@ LiteFences 桌面启动器 · 使用说明
    - 开始菜单快捷方式「LiteFences」
    - 桌面快捷方式「LiteFences」
    - 「设置 → 应用 → 已安装的应用」里的卸载项（和 MSI 的修复/卸载共用）
-3. 卸载：「设置 → 应用」里点卸载，或 `msiexec /x LiteFences-x.y.z-x64.msi`。
-   个人配置（布局、分组、日志）在 `%LOCALAPPDATA%\LiteFencesDesktop`，卸载不会删。
+3. **卸载走系统正常途径**：「设置 → 应用 → 已安装的应用」找到 LiteFences → 卸载；
+   或者在「开始菜单」右键 LiteFences → 卸载。也可以重新运行同一个 MSI，
+   会进入「修复 / 卸载」维护界面。
+   个人配置（布局、分组、日志）在 `%LOCALAPPDATA%\LiteFencesDesktop`，卸载不会删；
+   想彻底清干净，卸载后手动删掉这个目录即可。
 4. 不需要管理员权限，全部写在当前用户下。
 
-安装（旧脚本方式，便携包用）
-----------------------------
-1. 双击本文件夹里的 `安装.cmd`（或右键 install.ps1 → 使用 PowerShell 运行）。
-   它会问你两个问题：要不要桌面快捷方式、要不要开机自启。
-2. 卸载：同目录 `卸载.cmd`，或从「设置 → 应用」里点卸载；加 `-PurgeData` 会连配置一起删。
-
-也可以不安装，直接双击 `LiteFencesDesktop.exe` 用（数据一样存在
-`%LOCALAPPDATA%\LiteFencesDesktop`）。
+便携用法
+--------
+不想安装的话，直接双击 `LiteFencesDesktop.exe` 即可（配置一样存在
+`%LOCALAPPDATA%\LiteFencesDesktop`）。这种情况没有开始菜单/卸载项，
+关掉程序后删掉文件夹就算卸载。
 
 关于 SmartScreen
 ----------------

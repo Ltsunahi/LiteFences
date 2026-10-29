@@ -1,22 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  LiteFences 的 MSI 打包定义（WiX v5+）。
+  LiteFences 的 MSI 打包定义（WiX v5 + WixToolset.UI 扩展）。
 
   特点：
   - 按用户安装（perUser）：装到 %LOCALAPPDATA%\Programs\LiteFences，全程不需要管理员权限；
+  - 标准安装向导（欢迎 → 许可 → 进度 → 完成），已安装时再次双击进入「修复 / 卸载」维护界面；
   - 开始菜单 + 桌面快捷方式，图标取自 exe 自身；
-  - 升级用 MajorUpgrade：同版本重装 / 高版本覆盖低版本；卸载不会碰 %LOCALAPPDATA%\LiteFencesDesktop 里的用户配置。
+  - 升级用 MajorUpgrade：高版本覆盖低版本、不允许降级；
+  - 卸载不会碰 %LOCALAPPDATA%\LiteFencesDesktop 里的用户配置。
 
-  构建：
-    wix build packaging\LiteFences.wxs -arch x64 -d SourceDir=..\LiteFencesDesktop -d Version=0.1.0 -o LiteFences-0.1.0-x64.msi
+  构建（见 scripts\Build-Msi.ps1）：
+    wix build packaging\LiteFences.wxs -ext WixToolset.UI.wixext -arch x64 \
+      -d SourceDir=<暂存目录> -d Version=0.2.0 -d LicenseRtf=<LICENSE.rtf 绝对路径> -o out.msi
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package
     Name="LiteFences"
     Manufacturer="Ltsunahi"
     Version="$(var.Version)"
     UpgradeCode="7C5A2AFB-91B1-43CF-B18A-471AC32968E1"
     Language="2052"
+    Codepage="936"
     Scope="perUser"
     Compressed="yes">
 
@@ -24,15 +29,19 @@
 
     <!-- 先装新版本再删旧版本；不允许降级。 -->
     <MajorUpgrade
-      DowngradeErrorMessage="已安装更高版本的 LiteFences，请先卸载再安装这个版本。"
+      DowngradeErrorMessage="已安装更高版本的 LiteFences，请先在「设置 → 应用」里卸载它。"
       Schedule="afterInstallValidate" />
 
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\LiteFencesDesktop.exe" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
-    <Property Id="ARPNOMODIFY" Value="1" />
-    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <!-- 安装向导：欢迎 → 许可 → 进度 → 完成；再次运行同一 MSI 时提供修复/卸载。 -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT"
+              Value="LiteFences 已安装。双击桌面或开始菜单里的「LiteFences」即可启动；以后要卸载，请到「设置 → 应用 → 已安装的应用」找 LiteFences。" />
 
     <!-- 目录结构：LocalAppData\Programs\LiteFences -->
     <StandardDirectory Id="LocalAppDataFolder">
@@ -45,12 +54,15 @@
     </StandardDirectory>
     <StandardDirectory Id="DesktopFolder" />
 
-    <!-- 程序与说明文件 -->
+    <!-- 程序、说明与许可证 -->
     <Component Id="MainExecutable" Directory="INSTALLFOLDER" Guid="A65F073D-96F7-4A64-AF4C-F6A8B73D5E64">
       <File Id="MainExe" Source="$(var.SourceDir)\LiteFencesDesktop.exe" KeyPath="yes" />
     </Component>
     <Component Id="ManualFile" Directory="INSTALLFOLDER" Guid="12040A05-C6DD-4DF1-8B36-FDE95944502D">
       <File Id="ManualTxt" Source="$(var.SourceDir)\使用说明.txt" Name="使用说明.txt" KeyPath="yes" />
+    </Component>
+    <Component Id="LicenseFile" Directory="INSTALLFOLDER" Guid="0634BF69-256C-4B27-80B3-9CD7448FD3F6">
+      <File Id="LicenseTxt" Source="$(var.SourceDir)\LICENSE.txt" Name="LICENSE.txt" KeyPath="yes" />
     </Component>
 
     <!-- 开始菜单快捷方式；组件的 KeyPath 用注册表值，快捷方式本身不能当 KeyPath。 -->
@@ -79,6 +91,7 @@
     <Feature Id="Main" Title="LiteFences" Level="1">
       <ComponentRef Id="MainExecutable" />
       <ComponentRef Id="ManualFile" />
+      <ComponentRef Id="LicenseFile" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
     </Feature>

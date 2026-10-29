@@ -40,8 +40,16 @@ New-Item -ItemType Directory -Force -Path $stage | Out-Null
 try {
     Copy-Item -LiteralPath $Exe -Destination (Join-Path $stage 'LiteFencesDesktop.exe') -Force
     Copy-Item -LiteralPath (Join-Path $root 'packaging\使用说明.txt') -Destination (Join-Path $stage '使用说明.txt') -Force
+    Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $stage 'LICENSE.txt') -Force
     New-Item -ItemType Directory -Force -Path (Split-Path $Out) | Out-Null
-    & $wix build (Join-Path $root 'packaging\LiteFences.wxs') -arch x64 -d "SourceDir=$stage" -d "Version=$Version" -o $Out
+    $licenseRtf = Join-Path $root 'packaging\LICENSE.rtf'
+    & $wix build (Join-Path $root 'packaging\LiteFences.wxs') `
+        -ext WixToolset.UI.wixext `
+        -arch x64 `
+        -d "SourceDir=$stage" `
+        -d "Version=$Version" `
+        -d "LicenseRtf=$licenseRtf" `
+        -o $Out
     if ($LASTEXITCODE -ne 0) { throw "wix build 失败（退出码 $LASTEXITCODE）" }
     Write-Output $Out
 } finally {

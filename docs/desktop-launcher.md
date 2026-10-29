@@ -408,7 +408,7 @@ groups.txt → [组B] [组A] [其它]
 
 ## 2026-10-29（第三轮）：改成 MSI 安装
 
-原来的 `install.ps1` 只能在 PowerShell 里跑，双击安装体验一般，也进不了「设置 → 应用」的规范列表。
+原来的 `install.ps1` 只能在 PowerShell 里跑，双击安装体验一般，也进不了「设置 → 应用」的规范列表（该脚本后来已从便携包移除）。
 现在用 WiX v5 出 MSI：
 
 | 文件 | 作用 |
@@ -427,7 +427,25 @@ groups.txt → [组B] [组A] [其它]
 验证（本机实测整轮）：
 
 1. `msiexec /a` 解包：产物落在 `LocalApp\Programs\LiteFences\`，exe 与说明书齐全；
-2. 先 `卸载.cmd -Quiet` 清掉旧脚本安装 → `msiexec /i ... /qn` → 文件、两个快捷方式、
+2. （当时先用 `卸载.cmd -Quiet` 清掉旧脚本安装）→ `msiexec /i ... /qn` → 文件、两个快捷方式、
    `设置 → 应用` 里的 LiteFences 0.1.0（Publisher=Ltsunahi）都在；
 3. 已安装的 exe 跑 `--self-test`：`failures=0`；
 4. `msiexec /x {ProductCode} /qn` → 程序目录与桌面快捷方式都被清掉，配置目录保留。
+
+### 补：安装向导与正常卸载
+
+第一版 MSI 没有 UI，双击只是静默装完，卸载只能靠「设置 → 应用」。现在接上 `WixToolset.UI.wixext`：
+
+- `ui:WixUI Id="WixUI_Minimal"`：欢迎 → 许可（`packaging/LICENSE.rtf`）→ 进度 → 完成；
+- 已安装时再次运行同一个 MSI 会进入「修复 / 卸载」维护界面；
+- 完成页写明「以后要卸载请到设置 → 应用」，不再需要任何 .cmd；
+- 安装目录多放一份 `LICENSE.txt`；
+- 包语言 `Language=2052` + `Codepage=936`（1252 装不下中文，会报 WIX0311）。
+
+同时把便携目录里的 `安装.cmd` / `卸载.cmd` / `install.ps1` / `uninstall.ps1` 全部删掉——
+只保留 exe（便携直跑）、MSI、使用说明、LICENSE，避免两套安装/卸载方式并存。
+
+实测：0.1.0 静默升级到 0.2.0（ARP 变 0.2.0，旧 ProductCode 自动移除）；
+`msiexec /x` 卸载后程序目录、开始菜单目录、桌面快捷方式都清掉，配置目录保留；再装回来三个文件齐全。
+UI 窗口本身在这个沙箱会话里起不来（msiexec 从非交互上下文启动时看不到它的对话框），
+但已用 `wix msi decompile` 确认包里有 223 处 Dialog/WixUI 表项，且静默安装/卸载全部通过。
