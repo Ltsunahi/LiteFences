@@ -151,6 +151,7 @@ pub fn run() -> std::process::ExitCode {
         shown: false,
         shown_at: None,
         anim_started: None,
+        anim_alpha: 0.0,
         icons_hidden: false,
         items: Vec::new(),
         desktop_count: 0,

@@ -49,7 +49,6 @@ use crate::state::{BlurMode, state};
 use crate::util::{mouse_xy, wide};
 
 const CLASS_NAME: &str = "LiteFencesOverlay";
-const TIMER_ANIM: usize = 1;
 const TIMER_SEARCH: usize = 2;
 /// 拖入结果提示自动淡出。
 const TIMER_DROP_NOTICE: usize = 3;
@@ -373,16 +372,30 @@ pub fn show_panel() {
         }
     }
 
-    // 入场动画：整帧从下方一点点滑上来并淡入（所有虚化模式都有）。
+    // 入场动画：整帧淡入（所有虚化模式都有）。
     if app.blur == BlurMode::Accent {
-        // 亚克力模式额外从全透明开始，由定时器推进浓度。
+        // 亚克力模式从全透明开始，由下面这个循环推进浓度。
         apply_accent(app.overlay, 0);
     }
-    app.anim_started = Some(Instant::now());
-    // SAFETY: 句柄有效，定时器只用于推进动画；16ms ≈ 60fps。
-    unsafe { SetTimer(app.overlay, TIMER_ANIM, 16, None) };
+    let anim_start = Instant::now();
+    app.anim_started = Some(anim_start);
+    app.anim_alpha = 0.0;
+    // 先把静态帧画进缓存，避免动画第一帧里再做一次整屏重绘（会卡一下）。
+    // SAFETY: 句柄有效；GetDC/ReleaseDC 成对，缓存与窗口同尺寸。
+    unsafe {
+        let dc = GetDC(app.overlay);
+        if !dc.is_null() {
+            ensure_buffer(dc, client_w, client_h);
+            let cache = state().buffer_dc;
+            if !cache.is_null() {
+                render_static(cache, state(), client_w, client_h);
+                state().static_dirty = false;
+            }
+            ReleaseDC(app.overlay, dc);
+        }
+    }
     // 换内容了：先标记静态帧需要重画，再显示窗口，避免第一帧贴到旧缓存。
-    app.static_dirty = true;
+    state().static_dirty = state().static_dirty || state().buffer_dc.is_null();
     // SAFETY: 句柄有效。
     unsafe {
         ShowWindow(app.overlay, SW_SHOWNOACTIVATE);
@@ -409,6 +422,40 @@ pub fn show_panel() {
         app.layout.tiles.first().map(|t| t.top).unwrap_or(0),
         app.blur.as_str()
     ));
+
+    // 入场动画在这里同步跑完：用 DwmFlush 跟着合成器节奏走，
+    // 比 WM_TIMER 稳（定时器实测会出现 31ms 的空档，观感就是掉帧）。
+    let anim_ms = Duration::from_millis(ANIM_MS);
+    let mut frames = 0u32;
+    while anim_start.elapsed() < anim_ms {
+        frames += 1;
+        if state().blur == BlurMode::Accent {
+            let progress = anim_progress();
+            apply_accent(state().overlay, (progress * TINT_ALPHA as f32) as u32);
+        }
+        // SAFETY: 句柄有效；画一帧后等下一次合成。
+        unsafe {
+            InvalidateRect(state().overlay, std::ptr::null(), 0);
+            UpdateWindow(state().overlay);
+            windows_sys::Win32::Graphics::Dwm::DwmFlush();
+        }
+    }
+    log::info(&format!(
+        "入场动画：{frames} 帧 / {}ms",
+        anim_start.elapsed().as_millis()
+    ));
+    {
+        let app = state();
+        app.anim_started = None;
+        app.anim_alpha = 1.0;
+        // 动画期间工具条画进了缓存；收尾重画一版不含工具条的静态帧。
+        app.static_dirty = true;
+    }
+    // SAFETY: 句柄有效；贴最后一帧。
+    unsafe {
+        InvalidateRect(state().overlay, std::ptr::null(), 0);
+        UpdateWindow(state().overlay);
+    }
 }
 
 /// 面板正显示时内容发生变化（例如后台扫描刚完成）：重建窗口再显示，
@@ -466,7 +513,6 @@ pub fn hide_panel() {
     }
     // SAFETY: 句柄有效。
     unsafe {
-        KillTimer(app.overlay, TIMER_ANIM);
         KillTimer(app.overlay, TIMER_DROP_NOTICE);
         ShowWindow(app.overlay, SW_HIDE);
         // 收起后取消置顶，避免残留的 topmost 影响其他窗口。
@@ -1302,12 +1348,17 @@ fn paint(hwnd: HWND) {
                 render_static(cache, app, width, height);
                 app.static_dirty = false;
             }
-            if app.anim_started.is_some() {
-                // 入场动画：从 96% 缩放到 100% + 淡入。缩放时四周会露出一点真实桌面，
-                // 正好当作“面板铺开”的观感；不用分层窗口，文字不会丢。
-                let progress = anim_progress();
-                let alpha = (progress * 255.0).clamp(0.0, 255.0) as u8;
-                let inset = ((1.0 - progress) * (24.0 * app.layout.scale)).round() as i32;
+            // 亚克力模式靠窗口自身的浓度做动画（下面 paint 会照常贴图），其它模式用位图叠加淡入。
+            if app.anim_started.is_some() && app.blur != BlurMode::Accent {
+                let frame_started = Instant::now();
+                // 入场动画只做淡入，**不做缩放**：缩放版每帧要重采样整屏，实测一帧 39ms，
+                // 240ms 的动画直接掉到 20fps。1:1 叠加是几毫秒的量级，才可能流畅。
+                let target = anim_progress();
+                // 每帧都叠在“上一帧的结果”上，所以按目标值反算增量，保证整体曲线不跑偏。
+                let current = app.anim_alpha.clamp(0.0, 0.999);
+                let step = ((target - current) / (1.0 - current)).clamp(0.0, 1.0);
+                app.anim_alpha = target;
+                let alpha = (step * 255.0).clamp(0.0, 255.0) as u8;
                 let blend = BLENDFUNCTION {
                     BlendOp: AC_SRC_OVER as u8,
                     BlendFlags: 0,
@@ -1315,19 +1366,13 @@ fn paint(hwnd: HWND) {
                     AlphaFormat: 0,
                 };
                 // SAFETY: 两个 DC 有效；源是整屏 32 位 DIB，目标 DC 来自 BeginPaint。
-                AlphaBlend(
-                    hdc,
-                    inset,
-                    inset,
-                    width - inset * 2,
-                    height - inset * 2,
-                    cache,
-                    0,
-                    0,
-                    width,
-                    height,
-                    blend,
-                );
+                AlphaBlend(hdc, 0, 0, width, height, cache, 0, 0, width, height, blend);
+                let frame_ms = frame_started.elapsed().as_millis();
+                if frame_ms > 24 {
+                    log::warn(&format!(
+                        "入场动画单帧偏慢：{frame_ms}ms（{width}x{height}）"
+                    ));
+                }
             } else if redrawn {
                 // 内容刚重画过：必须整屏贴一次，否则窗口上会“一半新一半旧”。
                 // SAFETY: 两个 DC 都有效。
@@ -2679,33 +2724,7 @@ unsafe extern "system" fn overlay_proc(
             }
             0
         }
-        WM_TIMER if wparam == TIMER_ANIM => {
-            let app = state();
-            let progress = anim_progress();
-            if app.blur == BlurMode::Accent {
-                // 只在亚克力模式下有浓度可调；其它模式直接显形。
-                let alpha = (progress * TINT_ALPHA as f32) as u32;
-                apply_accent(hwnd, alpha);
-            }
-            if progress >= 1.0 {
-                app.anim_started = None;
-                // 动画期间工具条被画进了缓存；结束后要重画一版不含工具条的静态帧。
-                app.static_dirty = true;
-                // SAFETY: 句柄有效；最后一帧整屏落定。
-                unsafe {
-                    KillTimer(hwnd, TIMER_ANIM);
-                    InvalidateRect(hwnd, std::ptr::null(), 0);
-                }
-            } else {
-                // 每帧重绘：淡入 + 上滑。
-                // SAFETY: 句柄有效。
-                unsafe {
-                    InvalidateRect(hwnd, std::ptr::null(), 0);
-                    UpdateWindow(hwnd);
-                }
-            }
-            0
-        }
+
         WM_MOUSEMOVE => {
             let app = state();
             // 拖着分组标题走：算插入位置并画指示线（整屏重贴缓存，拖标题不频繁）。

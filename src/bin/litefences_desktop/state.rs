@@ -172,6 +172,8 @@ pub struct App {
     pub shown_at: Option<Instant>,
     /// 入场动画计时起点；None 表示动画已结束。
     pub anim_started: Option<Instant>,
+    /// 入场动画当前已经叠上去的不透明度（0..1），用来精确计算下一帧的增量。
+    pub anim_alpha: f32,
     pub icons_hidden: bool,
     pub items: Vec<DesktopItem>,
     /// `items` 里前多少个是自动读到的桌面图标（其余是手动添加的）。
