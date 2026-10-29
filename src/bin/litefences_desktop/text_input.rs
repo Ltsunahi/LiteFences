@@ -156,7 +156,7 @@ fn create_window(initial: &str) -> Option<HWND> {
         } else {
             (400, 300)
         };
-        let title = wide("新建分组");
+        let title = wide(crate::i18n::t("新建分组", "New group"));
         let hwnd = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             class_name.as_ptr(),
@@ -195,8 +195,8 @@ fn create_window(initial: &str) -> Option<HWND> {
             std::ptr::null(),
         );
         let button_class = wide("BUTTON");
-        let ok = wide("确定");
-        let cancel = wide("取消");
+        let ok = wide(crate::i18n::t("确定", "OK"));
+        let cancel = wide(crate::i18n::t("取消", "Cancel"));
         CreateWindowExW(
             0,
             button_class.as_ptr(),
@@ -469,7 +469,7 @@ fn paint(hwnd: HWND) {
         let font = create_font(scale, 15.0, 500);
         let title = state()
             .map(|state| state.title.clone())
-            .unwrap_or_else(|| "新建分组".to_string());
+            .unwrap_or_else(|| crate::i18n::t("新建分组", "New group").to_string());
         let label = wide(&title);
         let mut rect = RECT {
             left: 24,

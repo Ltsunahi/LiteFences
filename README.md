@@ -27,6 +27,7 @@
 | 整理 | 改名、换 `.ico` 图标、恢复默认图标、移除模式 |
 | 主题 | 深空蓝 / 石墨灰 / 午夜紫 / 森林绿 / 暖砂（浅色），菜单里切换 |
 | 常驻 | 托盘图标、可改唤出热键、开机自启、有界日志 |
+| 语言 | 简体中文 / English，跟随系统或手动切换（设置菜单 → 语言） |
 
 | 文件夹入口 | 午夜紫 |
 | --- | --- |
@@ -118,6 +119,7 @@ cargo build --release --features shell --locked
 ---
 
 **English**: LiteFences is a lightweight Windows desktop launcher written in Rust + Win32.
+The UI is available in Simplified Chinese and English (Settings → Language → Follow system / 中文 / English).
 It stays in the tray with no window, summons a full-screen frosted panel of your desktop icons,
 groups them, and accepts files dropped from Explorer — always by reference only, never moving your files.
 Build with `cargo build --release --features shell --locked` on Windows x64 with MSVC.

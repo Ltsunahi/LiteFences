@@ -32,6 +32,15 @@ fn groups_path() -> PathBuf {
 
 pub const DEFAULT_GROUP: &str = "其它";
 
+/// 界面上显示的分组名：默认组在英文界面显示 "Others"（文件里仍然存「其它」，不动数据）。
+pub fn display_name(name: &str) -> String {
+    if name == DEFAULT_GROUP && crate::i18n::is_en() {
+        "Others".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 pub fn load() -> Vec<Group> {
     let Ok(text) = std::fs::read_to_string(groups_path()) else {
         return Vec::new();

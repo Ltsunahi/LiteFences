@@ -160,19 +160,35 @@ impl DropReceiver {
         // SAFETY: GetData 返回的 medium 交给守卫释放；只读取文件列表，不碰文件。
         unsafe {
             let medium = data.GetData(&Self::format()).map_err(|_| {
-                "拖入的对象里没有本地文件路径（只支持文件、文件夹、快捷方式）。".to_string()
+                crate::i18n::t(
+                    "拖入的对象里没有本地文件路径（只支持文件、文件夹、快捷方式）。",
+                    "Nothing droppable here (files, folders and shortcuts only).",
+                )
+                .to_string()
             })?;
             let medium = Medium(medium);
             if medium.0.tymed != TYMED_HGLOBAL.0 as u32 {
-                return Err("拖入的对象不是本地文件列表。".into());
+                return Err(crate::i18n::t(
+                    "拖入的对象不是本地文件列表。",
+                    "Dropped item is not a local file list.",
+                )
+                .into());
             }
             let hdrop = HDROP(medium.0.u.hGlobal.0);
             if hdrop.0.is_null() {
-                return Err("拖入的文件列表为空。".into());
+                return Err(crate::i18n::t(
+                    "拖入的文件列表为空。",
+                    "Dropped file list is empty.",
+                )
+                .into());
             }
             let count = DragQueryFileW(hdrop, u32::MAX, None);
             if count == 0 {
-                return Err("拖入的文件列表为空。".into());
+                return Err(crate::i18n::t(
+                    "拖入的文件列表为空。",
+                    "Dropped file list is empty.",
+                )
+                .into());
             }
             let take = count.min(MAX_PATHS);
             let mut paths = Vec::with_capacity(take as usize);
@@ -291,7 +307,13 @@ impl IDropTarget_Impl for DropReceiver_Impl {
             }
         };
         if paths.is_empty() {
-            crate::overlay::show_drop_notice("拖入的项目不可用，没有加入面板。".into());
+            crate::overlay::show_drop_notice(
+                crate::i18n::t(
+                    "拖入的项目不可用，没有加入面板。",
+                    "Nothing usable was dropped; panel unchanged.",
+                )
+                .into(),
+            );
             return Ok(());
         }
         crate::overlay::show_drop_notice(crate::app::drop_paths(paths, group));

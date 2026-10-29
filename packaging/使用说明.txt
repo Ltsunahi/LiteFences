@@ -15,6 +15,12 @@ LiteFences 桌面启动器 · 使用说明
    想彻底清干净，卸载后手动删掉这个目录即可。
 4. 不需要管理员权限，全部写在当前用户下。
 
+语言 / Language
+---------------
+面板左上角「设置」或托盘菜单 →「语言」：跟随系统 / 中文 / English。
+选「跟随系统」时中文系统用中文，其它语言的系统用英文；选择会存进 settings.txt 的 lang=。
+设置菜单 / Tray menu → Language: Follow system / 中文 / English.
+
 便携用法
 --------
 不想安装的话，直接双击 `LiteFencesDesktop.exe` 即可（配置一样存在

@@ -74,6 +74,8 @@ fn settings_path() -> PathBuf {
 pub struct Settings {
     pub hotkey: Hotkey,
     pub theme: String,
+    /// `auto`（跟随系统）/ `zh` / `en`。
+    pub lang: String,
 }
 
 impl Default for Settings {
@@ -81,6 +83,7 @@ impl Default for Settings {
         Self {
             hotkey: Hotkey::default(),
             theme: "space".to_string(),
+            lang: "auto".to_string(),
         }
     }
 }
@@ -91,6 +94,13 @@ pub fn load() -> Settings {
         return settings;
     };
     for line in text.lines() {
+        if let Some(value) = line.trim().strip_prefix("lang=") {
+            let value = value.trim();
+            if !value.is_empty() {
+                settings.lang = value.to_string();
+            }
+            continue;
+        }
         if let Some(value) = line.trim().strip_prefix("theme=") {
             let value = value.trim();
             if !value.is_empty() {
@@ -120,8 +130,8 @@ pub fn save(settings: &Settings) {
         let _ = std::fs::create_dir_all(parent);
     }
     let text = format!(
-        "# LiteFences 设置\nhotkey={},{}\ntheme={}\n",
-        settings.hotkey.modifiers, settings.hotkey.key, settings.theme
+        "# LiteFences 设置\nhotkey={},{}\ntheme={}\nlang={}\n",
+        settings.hotkey.modifiers, settings.hotkey.key, settings.theme, settings.lang
     );
     if let Err(error) = std::fs::write(&path, text) {
         log::error(&format!("保存设置失败：{error}"));

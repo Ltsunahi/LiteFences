@@ -63,7 +63,11 @@ pub fn ask_for_hotkey(current: Hotkey) -> Option<Hotkey> {
         hotkey: current,
         captured: false,
         closed: false,
-        message: "按下想要的组合键（需含 Ctrl / Alt / Shift / Win），Esc 取消".into(),
+        message: crate::i18n::t(
+            "按下想要的组合键（需含 Ctrl / Alt / Shift / Win），Esc 取消",
+            "Press the shortcut you want (must include Ctrl / Alt / Shift / Win), Esc to cancel",
+        )
+        .into(),
     });
     let Some(hwnd) = create_window() else {
         *slot() = None;
@@ -110,7 +114,7 @@ fn create_window() -> Option<HWND> {
         } else {
             (400, 300)
         };
-        let title = wide("设置唤出热键");
+        let title = wide(crate::i18n::t("设置唤出热键", "Set hotkey"));
         let hwnd = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
             class_name.as_ptr(),
@@ -202,7 +206,11 @@ unsafe extern "system" fn dialog_proc(
             let modifiers = modifiers_now();
             if let Some(state) = state() {
                 if modifiers == 0 {
-                    state.message = "必须带上 Ctrl / Alt / Shift / Win 中的至少一个".into();
+                    state.message = crate::i18n::t(
+            "必须带上 Ctrl / Alt / Shift / Win 中的至少一个",
+            "Include at least one of Ctrl / Alt / Shift / Win",
+        )
+        .into();
                 } else {
                     state.hotkey = Hotkey { modifiers, key };
                     state.captured = true;
@@ -275,12 +283,12 @@ fn paint(hwnd: HWND) {
 
         let (title, value, hint) = match state() {
             Some(state) => (
-                "设置唤出热键".to_string(),
+                crate::i18n::t("设置唤出热键", "Set hotkey").to_string(),
                 state.hotkey.describe(),
                 state.message.clone(),
             ),
             None => (
-                "设置唤出热键".to_string(),
+                crate::i18n::t("设置唤出热键", "Set hotkey").to_string(),
                 "Ctrl+Alt+Space".to_string(),
                 String::new(),
             ),

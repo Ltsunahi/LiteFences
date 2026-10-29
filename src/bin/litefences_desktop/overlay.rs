@@ -696,7 +696,7 @@ fn move_group(from: usize, to: usize) {
 
 /// 工具条上的「新建分组」：输入名字后建立一个空组。
 fn create_group() {
-    let Some(name) = crate::text_input::ask("新建分组", "") else {
+    let Some(name) = crate::text_input::ask(crate::i18n::t("新建分组", "New group"), "") else {
         return;
     };
     let app = state();
@@ -750,12 +750,18 @@ fn open_group_menu(item_index: usize) {
         let labels: Vec<_> = app
             .groups
             .iter()
-            .map(|group| wide(&format!("移到「{}」", group.name)))
+            .map(|group| {
+                wide(&if crate::i18n::is_en() {
+                    format!("Move to \"{}\"", crate::groups::display_name(&group.name))
+                } else {
+                    format!("移到「{}」", crate::groups::display_name(&group.name))
+                })
+            })
             .collect();
-        let new_label = wide("新建分组并移入…");
-        let rename_label = wide("重命名…");
-        let icon_label = wide("更换图标…");
-        let reset_icon_label = wide("恢复默认图标");
+        let new_label = wide(crate::i18n::t("新建分组并移入…", "New group and move…"));
+        let rename_label = wide(crate::i18n::t("重命名…", "Rename…"));
+        let icon_label = wide(crate::i18n::t("更换图标…", "Change icon…"));
+        let reset_icon_label = wide(crate::i18n::t("恢复默认图标", "Reset icon"));
         AppendMenuW(menu, MF_STRING, 2, rename_label.as_ptr());
         if app
             .items
@@ -829,12 +835,19 @@ fn open_header_menu(group_index: usize) {
             return;
         }
         let portal_sort = group.portal.and_then(|index| app.portals.get(index)).map(|portal| portal.sort);
-        let rename = wide("重命名分组…");
-        let toggle = wide(if collapsed { "展开该组" } else { "折叠该组" });
-        let delete = wide(if portal_sort.is_some() {
-            "移除入口（目录内容不动）"
+        let rename = wide(crate::i18n::t("重命名分组…", "Rename group…"));
+        let toggle = wide(if collapsed {
+            crate::i18n::t("展开该组", "Expand")
         } else {
-            "删除分组（图标回到「其它」）"
+            crate::i18n::t("折叠该组", "Collapse")
+        });
+        let delete = wide(if portal_sort.is_some() {
+            crate::i18n::t("移除入口（目录内容不动）", "Remove folder entry (files untouched)")
+        } else {
+            crate::i18n::t(
+                "删除分组（图标回到「其它」）",
+                "Delete group (items go to \"Others\")",
+            )
         });
         AppendMenuW(menu, MF_STRING, 10, rename.as_ptr());
         AppendMenuW(menu, MF_STRING, 11, toggle.as_ptr());
@@ -848,7 +861,7 @@ fn open_header_menu(group_index: usize) {
             ];
             let labels: Vec<_> = modes
                 .iter()
-                .map(|(_, mode)| wide(&format!("排序：{}", mode.label())))
+                .map(|(_, mode)| wide(&format!("{} {}", crate::i18n::t("排序：", "Sort:"), mode.label())))
                 .collect();
             for ((id, mode), label) in modes.iter().zip(labels.iter()) {
                 let flags = if current == *mode {
@@ -915,7 +928,7 @@ fn rename_group(index: usize) {
     if current.is_empty() {
         return;
     }
-    let Some(name) = crate::text_input::ask("重命名分组", &current) else {
+    let Some(name) = crate::text_input::ask(crate::i18n::t("重命名分组", "Rename group"), &current) else {
         return;
     };
     let name = name.trim().to_string();
@@ -971,7 +984,7 @@ fn apply_group_command(command: usize, path: &std::path::Path, item_index: usize
     }
     let app = state();
     if command == 1 {
-        if let Some(name) = crate::text_input::ask("新建分组", "")
+        if let Some(name) = crate::text_input::ask(crate::i18n::t("新建分组", "New group"), "")
             && let Some(index) = crate::groups::create(&mut app.groups, &name)
         {
             crate::groups::assign(&mut app.groups, path, Some(index));
@@ -987,7 +1000,7 @@ fn apply_group_command(command: usize, path: &std::path::Path, item_index: usize
             .get(item_index)
             .map(|item| item.name.clone())
             .unwrap_or_default();
-        if let Some(name) = crate::text_input::ask("重命名图标", &current) {
+        if let Some(name) = crate::text_input::ask(crate::i18n::t("重命名图标", "Rename item"), &current) {
             crate::app::rename_item(item_index, &name);
         }
         return;
@@ -1673,7 +1686,10 @@ fn draw_one_header(hdc: HDC, app: &crate::state::App, header: &Header, rect: REC
     };
     let count = header.count;
     let arrow = if group.collapsed { "▶" } else { "▼" };
-    let text = wide(&format!("{arrow}  {}  ({count})", group.name));
+    let text = wide(&format!(
+        "{arrow}  {}  ({count})",
+        crate::groups::display_name(&group.name)
+    ));
     // SAFETY: 画笔与底色用完即释放。
     unsafe {
         let line = RECT {
@@ -1822,7 +1838,14 @@ unsafe fn draw_add_tile(
             brush,
         );
         DeleteObject(brush as _);
-        draw_label(hdc, "添加图标", tile, scale, icon, theme);
+        draw_label(
+            hdc,
+            crate::i18n::t("添加图标", "Add"),
+            tile,
+            scale,
+            icon,
+            theme,
+        );
     }
 }
 
@@ -2166,11 +2189,18 @@ fn draw_toolbar(hdc: HDC, app: &crate::state::App, paint: &RECT) {
         DeleteObject(line_brush as _);
     }
     let theme = app.theme;
-    draw_chip(hdc, settings_chip_rect(app), "设置", theme.chip, theme.text, scale);
+    draw_chip(
+        hdc,
+        settings_chip_rect(app),
+        crate::i18n::t("设置", "Settings"),
+        theme.chip,
+        theme.text,
+        scale,
+    );
     draw_chip(
         hdc,
         new_group_chip_rect(app),
-        "＋ 新建分组",
+        crate::i18n::t("＋ 新建分组", "+ New group"),
         theme.chip,
         theme.text,
         scale,
@@ -2178,7 +2208,11 @@ fn draw_toolbar(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     draw_chip(
         hdc,
         remove_chip_rect(app),
-        if app.remove_mode { "移除中" } else { "移除" },
+        if app.remove_mode {
+            crate::i18n::t("移除中", "Removing")
+        } else {
+            crate::i18n::t("移除", "Remove")
+        },
         if app.remove_mode { theme.chip_hot } else { theme.chip },
         if app.remove_mode { theme.warn_text } else { theme.text },
         scale,
@@ -2298,7 +2332,10 @@ fn draw_search_box(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     let expanded = (box_rect.right - box_rect.left) > (70.0 * scale) as i32;
     if expanded {
         let (text, color) = if app.search.is_empty() {
-            ("输入关键字…".to_string(), app.theme.text_dim)
+            (
+                crate::i18n::t("输入关键字…", "Type to search…").to_string(),
+                app.theme.text_dim,
+            )
         } else {
             (
                 format!("{}　（{}）", app.search, count_matches(app)),
@@ -2448,23 +2485,31 @@ fn draw_hint(hdc: HDC, app: &crate::state::App, paint: &RECT) {
         (notice.clone(), crate::theme::mix(theme.hint_bg, theme.drop_line, 0.35), theme.text)
     } else if app.remove_mode {
         (
-            "移除模式：单击图标从面板移除（源文件不动）　·　再点右上角或按 Esc 退出".to_string(),
+            crate::i18n::t(
+                "移除模式：单击图标从面板移除（源文件不动）　·　再点右上角或按 Esc 退出",
+                "Remove mode: click an icon to remove it from the panel (files untouched)　·　click Remove again or press Esc to exit",
+            )
+            .to_string(),
             theme.chip_hot,
             theme.warn_text,
         )
     } else if !app.search.is_empty() {
         (
-            format!(
-                "搜索「{}」：{} 个匹配　·　Esc 清除搜索",
-                app.search,
-                count_matches(app)
-            ),
+            if crate::i18n::is_en() {
+                format!("Search \"{}\": {} match(es)　·　Esc to clear", app.search, count_matches(app))
+            } else {
+                format!("搜索「{}」：{} 个匹配　·　Esc 清除搜索", app.search, count_matches(app))
+            },
             theme.hint_bg,
             theme.text,
         )
     } else {
         (
-            "拖动图标排序　·　单击打开　·　拖入文件即加入　·　单击空白处或按 Esc 收起".to_string(),
+            crate::i18n::t(
+                "拖动图标排序　·　单击打开　·　拖入文件即加入　·　单击空白处或按 Esc 收起",
+                "Drag to reorder　·　Click to open　·　Drop files to add　·　Click empty space or press Esc to close",
+            )
+            .to_string(),
             theme.hint_bg,
             theme.text,
         )
@@ -2556,9 +2601,10 @@ fn draw_banner(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     if !intersects(&bar, paint) {
         return;
     }
-    let text = wide(
+    let text = wide(crate::i18n::t(
         "受限权限运行：托盘不可用、多数程序点不开。请关闭本程序，在资源管理器里双击 LiteFencesDesktop.exe",
-    );
+        "Running with limited rights: tray unavailable, most apps cannot launch. Close this program and start LiteFencesDesktop.exe from Explorer instead.",
+    ));
     let mut rect = RECT {
         left: (16.0 * scale) as i32,
         right: app.layout.width - (16.0 * scale) as i32,

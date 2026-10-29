@@ -337,7 +337,7 @@ pub fn make_custom_item(path: PathBuf) -> DesktopItem {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("未命名")
+        .unwrap_or_else(|| crate::i18n::t("未命名", "Untitled"))
         .to_string();
     let name = display_name(&file_name);
     let icon = load_icon(&path, system_image_list());

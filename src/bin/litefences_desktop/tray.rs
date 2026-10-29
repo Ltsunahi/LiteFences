@@ -24,6 +24,8 @@ pub const MENU_HOTKEY: usize = 1006;
 pub const MENU_ADD_PORTAL: usize = 1007;
 /// 主题菜单项的起始编号：`MENU_THEME_BASE + 主题序号`。
 pub const MENU_THEME_BASE: usize = 1100;
+/// 语言菜单项：跟随系统 / 中文 / English。
+pub const MENU_LANG_BASE: usize = 1300;
 
 /// Explorer 重启后会广播 `TaskbarCreated`，收到后必须重新添加托盘图标。
 pub fn taskbar_created_message() -> u32 {
@@ -46,7 +48,10 @@ pub fn install(host: HWND) -> bool {
         hIcon: icon,
         ..Default::default()
     };
-    let tip = "LiteFences：双击桌面唤出图标面板";
+    let tip = crate::i18n::t(
+        "LiteFences：双击桌面唤出图标面板",
+        "LiteFences: double-click the desktop to open the panel",
+    );
     for (slot, ch) in data.szTip.iter_mut().zip(tip.encode_utf16()) {
         *slot = ch;
     }
@@ -90,21 +95,31 @@ pub fn remove(host: HWND) {
 }
 
 /// 弹出右键菜单并返回被选中的命令；0 表示取消。
-pub fn show_menu(host: HWND, autostart_on: bool, hotkey_text: &str, theme_key: &str) -> usize {
+pub fn show_menu(
+    host: HWND,
+    autostart_on: bool,
+    hotkey_text: &str,
+    theme_key: &str,
+    lang_setting: &str,
+) -> usize {
     let menu = unsafe { CreatePopupMenu() };
     if menu.is_null() {
         return 0;
     }
-    let show = wide("打开图标面板");
-    let hide = wide("隐藏图标面板");
+    let show = wide(crate::i18n::t("打开图标面板", "Open panel"));
+    let hide = wide(crate::i18n::t("隐藏图标面板", "Hide panel"));
     let autostart = wide(if autostart_on {
-        "开机自启（已开启）"
+        crate::i18n::t("开机自启（已开启）", "Start with Windows (on)")
     } else {
-        "开机自启（已关闭）"
+        crate::i18n::t("开机自启（已关闭）", "Start with Windows (off)")
     });
-    let hotkey = wide(&format!("设置唤出热键…（当前 {hotkey_text}）"));
-    let capture = wide("抓取面板画面（排障）");
-    let exit = wide("退出 LiteFences");
+    let hotkey = wide(&if crate::i18n::is_en() {
+        format!("Set hotkey… (now {hotkey_text})")
+    } else {
+        format!("设置唤出热键…（当前 {hotkey_text}）")
+    });
+    let capture = wide(crate::i18n::t("抓取面板画面（排障）", "Capture panel (diagnostics)"));
+    let exit = wide(crate::i18n::t("退出 LiteFences", "Quit LiteFences"));
     // SAFETY: 菜单句柄有效，字符串在调用期间保持存活。
     unsafe {
         AppendMenuW(menu, MF_STRING, MENU_SHOW, show.as_ptr());
@@ -117,13 +132,16 @@ pub fn show_menu(host: HWND, autostart_on: bool, hotkey_text: &str, theme_key: &
         };
         AppendMenuW(menu, autostart_flags, MENU_AUTOSTART, autostart.as_ptr());
         AppendMenuW(menu, MF_STRING, MENU_HOTKEY, hotkey.as_ptr());
-        let add_portal = wide("添加文件夹入口…（只读展示目录内容）");
+        let add_portal = wide(crate::i18n::t(
+            "添加文件夹入口…（只读展示目录内容）",
+            "Add folder entry… (read-only view)",
+        ));
         AppendMenuW(menu, MF_STRING, MENU_ADD_PORTAL, add_portal.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         // 主题：每个预设一项，当前项打勾。
         let theme_labels: Vec<_> = crate::theme::THEMES
             .iter()
-            .map(|theme| wide(&format!("主题：{}", theme.name)))
+            .map(|theme| wide(&format!("{} {}", crate::i18n::t("主题：", "Theme:"), theme.display_name())))
             .collect();
         let current = crate::theme::index_of(theme_key);
         for (index, label) in theme_labels.iter().enumerate() {
@@ -133,6 +151,26 @@ pub fn show_menu(host: HWND, autostart_on: bool, hotkey_text: &str, theme_key: &
                 MF_STRING
             };
             AppendMenuW(menu, flags, MENU_THEME_BASE + index, label.as_ptr());
+        }
+        // 语言：跟随系统 / 中文 / English，当前项打勾。
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+        let lang_labels = [
+            wide(crate::i18n::t("语言：跟随系统", "Language: Follow system")),
+            wide("语言：中文"),
+            wide("Language: English"),
+        ];
+        let current_lang = match lang_setting.trim().to_ascii_lowercase().as_str() {
+            "zh" | "zh-cn" => 1usize,
+            "en" | "en-us" => 2usize,
+            _ => 0usize,
+        };
+        for (index, label) in lang_labels.iter().enumerate() {
+            let flags = if index == current_lang {
+                MF_STRING | MF_CHECKED
+            } else {
+                MF_STRING
+            };
+            AppendMenuW(menu, flags, MENU_LANG_BASE + index, label.as_ptr());
         }
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         AppendMenuW(menu, MF_STRING, MENU_CAPTURE, capture.as_ptr());

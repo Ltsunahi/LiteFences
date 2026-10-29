@@ -45,9 +45,12 @@ impl SortMode {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::FolderFirst => "文件夹在前，再按名称",
-            Self::Name => "按名称",
-            Self::Time => "按修改时间（新的在前）",
+            Self::FolderFirst => crate::i18n::t(
+                "文件夹在前，再按名称",
+                "Folders first, then by name",
+            ),
+            Self::Name => crate::i18n::t("按名称", "By name"),
+            Self::Time => crate::i18n::t("按修改时间（新的在前）", "By modified time (newest first)"),
         }
     }
 }

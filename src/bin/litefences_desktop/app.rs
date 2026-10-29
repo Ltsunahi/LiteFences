@@ -144,6 +144,7 @@ pub fn run() -> std::process::ExitCode {
     let demo = options.demo.clone();
     let drop_test = options.drop_test.clone();
     let initial_settings = crate::settings::load();
+    crate::i18n::set(crate::i18n::resolve(&initial_settings.lang));
     install(App {
         host,
         overlay,
@@ -171,6 +172,7 @@ pub fn run() -> std::process::ExitCode {
         hidden: icons::load_hidden(),
         hotkey: initial_settings.hotkey,
         theme: crate::theme::by_key(&initial_settings.theme),
+        lang_setting: initial_settings.lang.clone(),
         search: String::new(),
         search_open: false,
         search_anim: None,
@@ -366,7 +368,11 @@ pub fn rebuild_portal_items() {
     app.groups.retain(|group| group.portal.is_none());
     for (index, portal) in app.portals.iter().enumerate() {
         let items = crate::portals::scan(portal);
-        let mut group = crate::groups::Group::new(format!("入口：{}", portal.name));
+        let mut group = crate::groups::Group::new(if crate::i18n::is_en() {
+        format!("Entry: {}", portal.name)
+    } else {
+        format!("入口：{}", portal.name)
+    });
         group.collapsed = portal.collapsed;
         group.portal = Some(index);
         group.paths = items.iter().map(|item| item.path.clone()).collect();
@@ -407,9 +413,32 @@ pub fn set_theme(key: &str) {
     crate::settings::save(&crate::settings::Settings {
         hotkey: app.hotkey,
         theme: theme.key.to_string(),
+        lang: app.lang_setting.clone(),
     });
     log::info(&format!("主题切换为「{}」（磨砂底色调下次唤出生效）", theme.name));
     overlay::relayout();
+}
+
+/// 切换界面语言：`auto` / `zh` / `en`。
+pub fn set_language(setting: &str) {
+    let app = state();
+    if app.lang_setting == setting {
+        return;
+    }
+    app.lang_setting = setting.to_string();
+    crate::i18n::set(crate::i18n::resolve(setting));
+    crate::settings::save(&crate::settings::Settings {
+        hotkey: app.hotkey,
+        theme: app.theme.key.to_string(),
+        lang: app.lang_setting.clone(),
+    });
+    log::info(&format!("界面语言：{}", setting));
+    if state().shown {
+        // 标题栏文字也要跟着换，直接重建窗口最省事。
+        overlay::reshow();
+    } else {
+        overlay::relayout();
+    }
 }
 
 /// 托盘/设置菜单：选一个目录，加为面板里的只读入口。
@@ -483,7 +512,11 @@ pub fn drop_paths(paths: Vec<PathBuf>, group: usize) -> String {
     let app = state();
     if app.groups.get(group).is_some_and(|group| group.portal.is_some()) {
         log::info("拒绝把文件拖进只读入口");
-        return "入口是只读视图，请拖到其它分组".to_string();
+        return crate::i18n::t(
+            "入口是只读视图，请拖到其它分组",
+            "Folder entries are read-only; drop into another group",
+        )
+        .to_string();
     }
     let mut added = 0usize;
     let mut moved = 0usize;
@@ -557,24 +590,41 @@ pub fn drop_paths(paths: Vec<PathBuf>, group: usize) -> String {
     let name = app
         .groups
         .get(group)
-        .map(|group| group.name.clone())
+        .map(|group| crate::groups::display_name(&group.name))
         .unwrap_or_default();
     if items_changed || groups_changed {
         persist_layout();
         overlay::relayout();
     }
+    let english = crate::i18n::is_en();
     let mut parts = Vec::new();
     if added > 0 {
-        parts.push(format!("加入「{name}」{added} 项"));
+        parts.push(if english {
+            format!("Added {added} to \"{name}\"")
+        } else {
+            format!("加入「{name}」{added} 项")
+        });
     }
     if moved > 0 {
-        parts.push(format!("移入「{name}」{moved} 项"));
+        parts.push(if english {
+            format!("Moved {moved} into \"{name}\"")
+        } else {
+            format!("移入「{name}」{moved} 项")
+        });
     }
     if skipped > 0 {
-        parts.push(format!("跳过 {skipped} 项（已在面板或不可用）"));
+        parts.push(if english {
+            format!("Skipped {skipped} (already present or unavailable)")
+        } else {
+            format!("跳过 {skipped} 项（已在面板或不可用）")
+        });
     }
     if parts.is_empty() {
-        format!("「{name}」里没有可加入的新项目")
+        if english {
+            format!("Nothing new to add to \"{name}\"")
+        } else {
+            format!("「{name}」里没有可加入的新项目")
+        }
     } else {
         parts.join("　·　")
     }
@@ -794,7 +844,7 @@ fn relaunch_normal_and_exit_obsolete() -> bool {
          点「是」打开程序所在文件夹（在那里双击即可）；\n\
          点「否」继续以受限权限运行（只有热键和面板，没有托盘）。",
     );
-    let caption = wide("LiteFences 桌面启动器");
+    let caption = wide(crate::i18n::t("LiteFences 桌面启动器", "LiteFences"));
     // SAFETY: 文本以 0 结尾，父窗口为空表示桌面模态。
     let choice = unsafe {
         MessageBoxW(
@@ -970,6 +1020,7 @@ fn change_hotkey() {
         crate::settings::save(&crate::settings::Settings {
             hotkey: chosen,
             theme: app.theme.key.to_string(),
+            lang: app.lang_setting.clone(),
         });
     }
     log::info(&format!("唤出热键已改为 {}", chosen.describe()));
@@ -1173,7 +1224,8 @@ fn handle_menu(host: HWND) {
     let autostart_on = crate::autostart::enabled(&exe);
     let hotkey_text = state().hotkey.describe();
     let theme_key = state().theme.key;
-    let command = tray::show_menu(host, autostart_on, &hotkey_text, theme_key);
+    let lang_setting = state().lang_setting.clone();
+    let command = tray::show_menu(host, autostart_on, &hotkey_text, theme_key, &lang_setting);
     handle_command(command);
 }
 
@@ -1186,6 +1238,12 @@ fn handle_command(command: usize) {
         tray::MENU_HOTKEY => change_hotkey(),
         tray::MENU_ADD_PORTAL => add_portal_from_picker(),
         tray::MENU_EXIT => request_exit(state().host),
+        other if other >= tray::MENU_LANG_BASE => {
+            let index = other - tray::MENU_LANG_BASE;
+            if let Some(setting) = ["auto", "zh", "en"].get(index) {
+                set_language(setting);
+            }
+        }
         other if other >= tray::MENU_THEME_BASE => {
             let index = other - tray::MENU_THEME_BASE;
             if let Some(theme) = crate::theme::THEMES.get(index) {
@@ -1208,7 +1266,10 @@ fn toggle_autostart() {
         )),
         Err(error) => {
             log::error(&format!("设置开机自启失败：{error}"));
-            let text = wide(&format!("设置开机自启失败：{error}"));
+            let text = wide(&format!(
+            "{}：{error}",
+            crate::i18n::t("设置开机自启失败", "Failed to change startup setting")
+        ));
             let caption = wide("LiteFences 桌面启动器");
             // SAFETY: 文本以 0 结尾；父窗口为空表示桌面模态。
             unsafe {

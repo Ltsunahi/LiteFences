@@ -6,6 +6,8 @@
 pub struct Theme {
     pub key: &'static str,
     pub name: &'static str,
+    /// 英文名（界面语言为英文时用）。
+    pub name_en: &'static str,
     /// 磨砂底板混入的颜色 (R, G, B)。
     pub tint: (u8, u8, u8),
     /// 混入强度：0 = 保持桌面原色，1 = 完全变成 tint 色。浅色主题需要压得更狠才读得清黑字。
@@ -36,10 +38,22 @@ pub struct Theme {
     pub warn_text: u32,
 }
 
+impl Theme {
+    /// 当前界面语言下的显示名。
+    pub fn display_name(&self) -> &'static str {
+        if crate::i18n::is_en() {
+            self.name_en
+        } else {
+            self.name
+        }
+    }
+}
+
 pub const THEMES: &[Theme] = &[
     Theme {
         key: "space",
         name: "深空蓝",
+        name_en: "Space blue",
         tint: (22, 24, 30),
         tint_strength: 0.45,
         bar: 0x0016_1616,
@@ -59,6 +73,7 @@ pub const THEMES: &[Theme] = &[
     Theme {
         key: "graphite",
         name: "石墨灰",
+        name_en: "Graphite",
         tint: (26, 26, 28),
         tint_strength: 0.45,
         bar: 0x0018_1818,
@@ -78,6 +93,7 @@ pub const THEMES: &[Theme] = &[
     Theme {
         key: "midnight",
         name: "午夜紫",
+        name_en: "Midnight purple",
         tint: (28, 20, 36),
         tint_strength: 0.55,
         bar: 0x0026_1218,
@@ -97,6 +113,7 @@ pub const THEMES: &[Theme] = &[
     Theme {
         key: "forest",
         name: "森林绿",
+        name_en: "Forest green",
         tint: (18, 30, 24),
         tint_strength: 0.55,
         bar: 0x0012_1A14,
@@ -116,6 +133,7 @@ pub const THEMES: &[Theme] = &[
     Theme {
         key: "sand",
         name: "暖砂（浅色）",
+        name_en: "Warm sand (light)",
         tint: (214, 208, 198),
         tint_strength: 0.86,
         bar: 0x00EA_EEF0,

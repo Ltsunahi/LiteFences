@@ -210,6 +210,8 @@ pub struct App {
     pub hotkey: crate::settings::Hotkey,
     /// 当前配色主题。
     pub theme: &'static crate::theme::Theme,
+    /// 语言设置原值：`auto` / `zh` / `en`（保存时原样写回）。
+    pub lang_setting: String,
     /// 搜索关键字（空 = 不过滤）。
     pub search: String,
     /// 搜索栏是否展开。
