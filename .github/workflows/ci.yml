@@ -24,7 +24,10 @@ jobs:
         run: cargo build --release --locked
 
       - name: Install WiX
-        run: dotnet tool install --global wix --version 5.*
+        run: |
+          dotnet tool install --global wix --version 5.*
+          $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
+          wix extension add -g WixToolset.UI.wixext/5.0.2
 
       - name: Build MSI
         shell: pwsh

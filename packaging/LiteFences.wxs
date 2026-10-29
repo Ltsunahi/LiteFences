@@ -77,6 +77,21 @@
       <RegistryValue Root="HKCU" Key="Software\Ltsunahi\LiteFences" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
     </Component>
 
+    <!-- 卸载时清掉程序自己写的开机自启值：RemoveRegistryValue 在这个包里没生效（实测残留），
+         改用延迟自定义动作调 reg.exe；升级时不执行，保留用户原来的自启选择。 -->
+    <CustomAction Id="RemoveAutostartValue"
+                  Directory="SystemFolder"
+                  ExeCommand="reg.exe delete &quot;HKCU\Software\Microsoft\Windows\CurrentVersion\Run&quot; /v LiteFencesDesktop /f"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="RemoveAutostartValue"
+              Before="RemoveFiles"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
     <!-- 桌面快捷方式 -->
     <Component Id="DesktopShortcut" Directory="DesktopFolder" Guid="556A1932-29F1-42C2-870B-DC67D1403DB2">
       <Shortcut Id="DesktopLink"
