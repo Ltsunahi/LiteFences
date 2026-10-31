@@ -3271,12 +3271,29 @@ unsafe extern "system" fn overlay_proc(
                         let target = hit_test(drag.current.0, drag.current.1)
                             .filter(|index| *index < app.items.len());
                         let point = content_point(app, drag.current.0, drag.current.1);
-                        let hover_header = app
-                            .layout
-                            .headers
-                            .iter()
-                            .find(|header| unsafe { PtInRect(&header.rect, point) != 0 })
-                            .map(|header| (header.group, view_rect(app, header.rect)));
+                        // 源图标所在的组：拖到别的组的图标上也应算「移入该组」，
+                        // 不用非得拖到分组标题那一行。
+                        let source_group = app
+                            .items
+                            .get(drag.from)
+                            .and_then(|item| crate::groups::group_of(&app.groups, &item.path));
+                        let group_under_icon = target
+                            .and_then(|index| app.items.get(index))
+                            .and_then(|item| crate::groups::group_of(&app.groups, &item.path))
+                            .filter(|group| Some(*group) != source_group);
+                        let hover_header = if let Some(group) = group_under_icon {
+                            app.layout
+                                .headers
+                                .iter()
+                                .find(|header| header.group == group)
+                                .map(|header| (group, view_rect(app, header.rect)))
+                        } else {
+                            app.layout
+                                .headers
+                                .iter()
+                                .find(|header| unsafe { PtInRect(&header.rect, point) != 0 })
+                                .map(|header| (header.group, view_rect(app, header.rect)))
+                        };
                         // 先把缓存刷成当前布局，否则贴回的是旧画面（表现为“涂抹”）。
                         ensure_cache(hwnd);
                         // 直接画，不进 WM_PAINT：先贴回旧区域，再画新的跟随图标/目标框。
@@ -3334,6 +3351,16 @@ unsafe extern "system" fn overlay_proc(
                         }
                         drag.ghost = Some(new_ghost);
                         drag.target = target;
+                        if drag.header != hover_header.map(|(group, _)| group) {
+                            if let Some((group, _)) = hover_header {
+                                let name = app
+                                    .groups
+                                    .get(group)
+                                    .map(|entry| entry.name.clone())
+                                    .unwrap_or_default();
+                                log::info(&format!("拖动目标组：{name}"));
+                            }
+                        }
                         drag.header = hover_header.map(|(group, _)| group);
                         drag.header_rect = hover_header.map(|(_, rect)| rect);
                     }
