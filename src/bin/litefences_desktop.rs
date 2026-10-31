@@ -40,6 +40,9 @@ mod i18n;
 #[path = "litefences_desktop/icon_cache.rs"]
 mod icon_cache;
 #[cfg(windows)]
+#[path = "litefences_desktop/icon_pixels.rs"]
+mod icon_pixels;
+#[cfg(windows)]
 #[path = "litefences_desktop/icons.rs"]
 mod icons;
 #[cfg(windows)]

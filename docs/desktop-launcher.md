@@ -606,3 +606,19 @@ INFO 桌面目录：C:\Users\16\Desktop | C:\Users\Public\Desktop
 
 结论：索引缓存保留（没有副作用，命中率 100%，省掉 shell 查询），但要真正到 100ms 级，
 下一步得做**像素缓存**：把 48×48 的位图落盘（二进制），启动时 `CreateIconIndirect` 直接重建 HICON。
+
+### 补：像素缓存（真正的加速）
+
+索引缓存只省掉 shell 查询（818ms）。这轮做像素缓存：把 48×48 的 BGRA 位图存进 `icons.bin`，
+启动时 `CreateDIBSection + CreateIconIndirect` 直接重建 HICON，完全绕开 `ImageList_GetIcon`。
+
+| 场景 | 耗时 | 命中 |
+| --- | --- | --- |
+| 冷启动（无缓存） | 880 ms | 0 |
+| 热启动 | **17 ms** | 81/81 |
+
+缓存文件 750 KB（81 项），按「修改时间 + 大小」失效，单条变了只重取那一条。
+
+踩的坑：一开始想用 `SHIL_JUMBO`（256px）当源、缓存 64px，结果很多小图标在 256px 列表里
+根本不存在，取回来是空白/黑点（截图里 HypoMux、VS Code、微信都成了小方块）。退回
+`SHIL_EXTRALARGE`（48px）+ 48px 缓存，1:1 拷贝，图标全部正常。

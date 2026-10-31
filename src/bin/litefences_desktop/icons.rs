@@ -144,12 +144,13 @@ pub fn collect_items(hidden: &[PathBuf]) -> Result<Vec<DesktopItem>, String> {
     });
     let image_list = system_image_list();
     let mut cache = crate::icon_cache::IconCache::load();
+    let mut pixels = crate::icon_pixels::PixelCache::load();
     let icons_started = std::time::Instant::now();
     let mut items = Vec::with_capacity(found.len());
     for (_is_dir, file_name, path) in found {
         let name = display_name(&file_name);
         let started = std::time::Instant::now();
-        let icon = load_icon_cached(&path, image_list, &mut cache);
+        let icon = load_icon_cached(&path, image_list, &mut cache, &mut pixels);
         let elapsed = started.elapsed().as_millis();
         if elapsed > 200 {
             log::warn(&format!("取图标耗时 {elapsed}ms：{}", path.display()));
@@ -163,9 +164,11 @@ pub fn collect_items(hidden: &[PathBuf]) -> Result<Vec<DesktopItem>, String> {
         });
     }
     let (hits, misses) = (cache.hits(), cache.misses());
+    let (pixel_hits, pixel_misses) = (pixels.hits(), pixels.misses());
     cache.save();
+    pixels.save();
     log::info(&format!(
-        "图标加载：{} 项 / {}ms（缓存命中 {hits}，未命中 {misses}）",
+        "图标加载：{} 项 / {}ms（像素命中 {pixel_hits}，索引命中 {hits}，未命中 {misses}/{pixel_misses}）",
         items.len(),
         icons_started.elapsed().as_millis()
     ));
@@ -282,17 +285,29 @@ fn load_icon_indexed(path: &Path, image_list: isize) -> (HICON, i32) {
     (icon, index.unwrap_or(-1))
 }
 
-/// 先查缓存，未命中再问 shell，并把结果记回缓存。
-fn load_icon_cached(path: &Path, image_list: isize, cache: &mut crate::icon_cache::IconCache) -> HICON {
+/// 先查像素缓存，再查索引缓存，最后才问 shell；拿到图标就回写缓存。
+fn load_icon_cached(
+    path: &Path,
+    image_list: isize,
+    cache: &mut crate::icon_cache::IconCache,
+    pixels: &mut crate::icon_pixels::PixelCache,
+) -> HICON {
     let mtime = crate::icon_cache::mtime_of(path);
     let size = crate::icon_cache::size_of(path);
+    if let Some(icon) = pixels.lookup(path, mtime, size) {
+        return icon;
+    }
     if let Some(index) = cache.lookup(path, mtime, size)
         && let Some(icon) = icon_from_index(image_list, index)
     {
+        pixels.remember(path, mtime, size, icon);
         return icon;
     }
     let (icon, index) = load_icon_indexed(path, image_list);
     cache.remember(path, mtime, size, index);
+    if !icon.is_null() {
+        pixels.remember(path, mtime, size, icon);
+    }
     icon
 }
 
