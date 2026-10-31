@@ -1,6 +1,6 @@
 [package]
 name = "litefences"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 publish = false
 description = "轻量 Windows 桌面启动器：磨砂面板、图标分组、拖入引用"

@@ -52,6 +52,8 @@ const CLASS_NAME: &str = "LiteFencesOverlay";
 const TIMER_SEARCH: usize = 2;
 /// 拖入结果提示自动淡出。
 const TIMER_DROP_NOTICE: usize = 3;
+/// 拖动到面板边缘时的自动滚动。
+const TIMER_AUTOSCROLL: usize = 5;
 
 /// 唤出后忽略点击的时间窗口，单位毫秒。
 const SHOW_COOLDOWN_MS: u64 = 350;
@@ -1504,6 +1506,7 @@ fn paint(hwnd: HWND) {
         if app.drag.is_some_and(|drag| drag.active) {
             draw_drag(hdc, app, &full);
         }
+        draw_empty_hint(hdc, app);
         draw_selection(hdc, app);
         EndPaint(hwnd, &ps);
     }
@@ -3023,6 +3026,80 @@ fn draw_selection(hdc: HDC, app: &crate::state::App) {
     }
 }
 
+/// 拖动时指针停在面板上/下边缘：持续滚动内容。
+fn auto_scroll_tick(hwnd: HWND) {
+    let app = state();
+    let Some(drag) = app.drag else {
+        return;
+    };
+    if !drag.active {
+        return;
+    }
+    let mut point = POINT::default();
+    // SAFETY: 输出结构体有效；句柄有效。
+    unsafe {
+        GetCursorPos(&mut point);
+        windows_sys::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut point);
+    }
+    let scale = app.layout.scale;
+    let top_zone = content_top(app) + (28.0 * scale) as i32;
+    let bottom_zone = app.layout.height - (80.0 * scale) as i32;
+    let step = (14.0 * scale) as i32;
+    let delta = if point.y < top_zone {
+        -step
+    } else if point.y > bottom_zone {
+        step
+    } else {
+        0
+    };
+    if delta == 0 {
+        return;
+    }
+    let next = (app.scroll + delta).clamp(0, max_scroll(app));
+    if next == app.scroll {
+        return;
+    }
+    app.scroll = next;
+    app.static_dirty = true;
+    // SAFETY: 句柄有效；整屏重画一帧，拖拽 ghost 由 paint 负责。
+    unsafe {
+        InvalidateRect(hwnd, std::ptr::null(), 0);
+        UpdateWindow(hwnd);
+    }
+}
+
+/// 桌面一个图标都没有时，给一句说明，免得以为面板坏了。
+fn draw_empty_hint(hdc: HDC, app: &crate::state::App) {
+    if !app.items.is_empty() && !app.options.empty {
+        return;
+    }
+    let scale = app.layout.scale;
+    // 内容区垂直居中。
+    let center = (content_top(app) + app.layout.height) / 2;
+    let mut rect = RECT {
+        left: (app.layout.width as f32 * 0.15) as i32,
+        top: center - (60.0 * scale) as i32,
+        right: (app.layout.width as f32 * 0.85) as i32,
+        bottom: center + (60.0 * scale) as i32,
+    };
+    let text = wide(crate::i18n::t(
+        "没读到桌面图标。\n点右下角「添加图标」，或从资源管理器把文件拖进来。",
+        "No desktop icons found.\nClick \"Add\" or drop files here from Explorer.",
+    ));
+    // SAFETY: 字体已由 paint 选进 DC。
+    unsafe {
+        SetBkMode(hdc, TRANSPARENT as i32);
+        SetTextColor(hdc, app.theme.text_dim);
+        DrawTextW(
+            hdc,
+            text.as_ptr(),
+            -1,
+            &mut rect,
+            DT_CENTER | DT_WORDBREAK | DT_NOPREFIX,
+        );
+    }
+}
+
 fn launch_and_hide(index: usize) {    let app = state();
     let Some(item) = app.items.get(index) else {
         return;
@@ -3100,6 +3177,10 @@ unsafe extern "system" fn overlay_proc(
             }
             0
         }
+        WM_TIMER if wparam == TIMER_AUTOSCROLL => {
+            auto_scroll_tick(hwnd);
+            0
+        }
         WM_TIMER if wparam == TIMER_DROP_NOTICE => {
             let app = state();
             app.drop_notice = None;
@@ -3161,6 +3242,9 @@ unsafe extern "system" fn overlay_proc(
                         return 0;
                     }
                     drag.active = true;
+                    // 拖到上下边缘时自动滚动。
+                    // SAFETY: 句柄有效；30ms 一次。
+                    unsafe { SetTimer(hwnd, TIMER_AUTOSCROLL, 30, None) };
                     drag.last_paint = None;
                     drag.ghost = None;
                     drag.target = None;

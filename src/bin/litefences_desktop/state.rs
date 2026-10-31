@@ -66,6 +66,8 @@ pub struct Options {
     pub capture: Option<String>,
     /// 排障：启动时直接选中第 N 个图标（验证选中框绘制用）。
     pub select: Option<usize>,
+    /// 排障：强制显示「没有桌面图标」提示（截图验证用）。
+    pub empty: bool,
     /// 命令行直接设置开机自启（`--autostart=on|off`），设置完退出。
     pub autostart: Option<bool>,
     /// 排障：启动后直接弹出某个界面（`--demo=newgroup`）。
@@ -86,6 +88,7 @@ impl Default for Options {
             launch_test: None,
             capture: None,
         select: None,
+        empty: false,
             autostart: None,
             demo: None,
             drop_test: None,
@@ -108,7 +111,9 @@ impl Options {
                     BlurMode::parse(value).ok_or_else(|| format!("未知虚化模式：{value}"))?;
             } else if let Some(value) = arg.strip_prefix("--launch-test=") {
                 options.launch_test = Some(value.to_string());
-            } else if let Some(value) = arg.strip_prefix("--select=") {
+            } else if arg == "--empty" {
+            options.empty = true;
+        } else if let Some(value) = arg.strip_prefix("--select=") {
             options.select = value.trim().parse().ok();
         } else if let Some(value) = arg.strip_prefix("--capture=") {
                 options.capture = Some(value.trim_matches('"').to_string());
