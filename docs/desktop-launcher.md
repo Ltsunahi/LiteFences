@@ -588,3 +588,21 @@ INFO 桌面目录：C:\Users\16\Desktop | C:\Users\Public\Desktop
 验证：`FileVersion=0.2.0 / ProductName=LiteFences / CompanyName=Ltsunahi / Desc=LiteFences 桌面启动器`；
 从 exe 里按 256/48/16 提取图标都正确；MSI 重装后 `DisplayIcon` 指向安装目录的 exe；
 `cargo test` 13 项通过，self-test `failures=0`。
+
+## 2026-10-31：图标索引缓存（收益有限，但定位到了真瓶颈）
+
+启动时逐个文件调 `SHGetFileInfo`，82 项实测 1.7 秒。先把「路径 → 系统图标列表索引」缓存到
+`icons-cache.json`（路径 + 修改时间 + 大小 + 索引），命中就直接 `ImageList_GetIcon`。
+
+实测（81 项）：
+
+| 场景 | 耗时 | 命中 |
+| --- | --- | --- |
+| 冷缓存 | 999 ms | 0 |
+| 热缓存 | 818 ms | 81 |
+
+只快了 181ms。进一步看：81 条索引**全不相同**，热缓存下平均每个图标仍要 10ms——
+说明瓶颈不在 `SHGetFileInfo`，而在 `ImageList_GetIcon`：每次取图标都要从系统图像列表里解码一次位图。
+
+结论：索引缓存保留（没有副作用，命中率 100%，省掉 shell 查询），但要真正到 100ms 级，
+下一步得做**像素缓存**：把 48×48 的位图落盘（二进制），启动时 `CreateIconIndirect` 直接重建 HICON。

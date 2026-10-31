@@ -143,25 +143,33 @@ pub fn collect_items(hidden: &[PathBuf]) -> Result<Vec<DesktopItem>, String> {
             .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
     });
     let image_list = system_image_list();
-    Ok(found
-        .into_iter()
-        .map(|(_is_dir, file_name, path)| {
-            let name = display_name(&file_name);
-            let started = std::time::Instant::now();
-            let icon = load_icon(&path, image_list);
-            let elapsed = started.elapsed().as_millis();
-            if elapsed > 200 {
-                log::warn(&format!("取图标耗时 {elapsed}ms：{}", path.display()));
-            }
-            DesktopItem {
-                path,
-                name,
-                icon,
-                source: ItemSource::Desktop,
-                custom_icon: None,
-            }
-        })
-        .collect())
+    let mut cache = crate::icon_cache::IconCache::load();
+    let icons_started = std::time::Instant::now();
+    let mut items = Vec::with_capacity(found.len());
+    for (_is_dir, file_name, path) in found {
+        let name = display_name(&file_name);
+        let started = std::time::Instant::now();
+        let icon = load_icon_cached(&path, image_list, &mut cache);
+        let elapsed = started.elapsed().as_millis();
+        if elapsed > 200 {
+            log::warn(&format!("取图标耗时 {elapsed}ms：{}", path.display()));
+        }
+        items.push(DesktopItem {
+            path,
+            name,
+            icon,
+            source: ItemSource::Desktop,
+            custom_icon: None,
+        });
+    }
+    let (hits, misses) = (cache.hits(), cache.misses());
+    cache.save();
+    log::info(&format!(
+        "图标加载：{} 项 / {}ms（缓存命中 {hits}，未命中 {misses}）",
+        items.len(),
+        icons_started.elapsed().as_millis()
+    ));
+    Ok(items)
 }
 
 /// 桌面目录的“版本号”，用于判断是否需要重新扫描。
@@ -258,7 +266,37 @@ fn system_image_list() -> isize {
     })
 }
 
-fn load_icon(path: &Path, image_list: isize) -> HICON {
+/// 按系统图标列表的索引直接取图标；索引越界或列表不可用时返回 None。
+fn icon_from_index(image_list: isize, index: i32) -> Option<HICON> {
+    if image_list == 0 || index < 0 {
+        return None;
+    }
+    // SAFETY: image_list 由 SHGetImageList 返回；索引来自同一个系统列表。
+    let icon = unsafe { ImageList_GetIcon(image_list as HIMAGELIST, index, ILD_TRANSPARENT) };
+    if icon.is_null() { None } else { Some(icon) }
+}
+
+/// 取图标，同时把系统图标索引带出来（用于写缓存）。
+fn load_icon_indexed(path: &Path, image_list: isize) -> (HICON, i32) {
+    let (icon, index) = load_icon_inner(path, image_list);
+    (icon, index.unwrap_or(-1))
+}
+
+/// 先查缓存，未命中再问 shell，并把结果记回缓存。
+fn load_icon_cached(path: &Path, image_list: isize, cache: &mut crate::icon_cache::IconCache) -> HICON {
+    let mtime = crate::icon_cache::mtime_of(path);
+    let size = crate::icon_cache::size_of(path);
+    if let Some(index) = cache.lookup(path, mtime, size)
+        && let Some(icon) = icon_from_index(image_list, index)
+    {
+        return icon;
+    }
+    let (icon, index) = load_icon_indexed(path, image_list);
+    cache.remember(path, mtime, size, index);
+    icon
+}
+
+fn load_icon_inner(path: &Path, image_list: isize) -> (HICON, Option<i32>) {
     let wide_path = os_wide(path);
     let mut info = SHFILEINFOW::default();
     // SAFETY: 结构体大小与缓冲区一致，路径以 0 结尾。
@@ -271,12 +309,10 @@ fn load_icon(path: &Path, image_list: isize) -> HICON {
             SHGFI_SYSICONINDEX,
         )
     };
-    if ok != 0 && image_list != 0 {
-        // SAFETY: image_list 由 SHGetImageList 返回，索引来自 SHGetFileInfo。
-        let icon = unsafe { ImageList_GetIcon(image_list as HIMAGELIST, info.iIcon, ILD_TRANSPARENT) };
-        if !icon.is_null() {
-            return icon;
-        }
+    if ok != 0
+        && let Some(icon) = icon_from_index(image_list, info.iIcon)
+    {
+        return (icon, Some(info.iIcon));
     }
     let mut fallback = SHFILEINFOW::default();
     // SAFETY: 同上。
@@ -290,9 +326,9 @@ fn load_icon(path: &Path, image_list: isize) -> HICON {
         )
     };
     if ok != 0 {
-        fallback.hIcon
+        (fallback.hIcon, None)
     } else {
-        std::ptr::null_mut()
+        (std::ptr::null_mut(), None)
     }
 }
 
@@ -391,7 +427,7 @@ pub fn make_custom_item(path: PathBuf) -> DesktopItem {
         .unwrap_or_else(|| crate::i18n::t("未命名", "Untitled"))
         .to_string();
     let name = display_name(&file_name);
-    let icon = load_icon(&path, system_image_list());
+    let icon = load_icon_indexed(&path, system_image_list()).0;
     DesktopItem {
         path,
         name,
@@ -549,7 +585,7 @@ pub fn set_custom_icon(item: &mut DesktopItem, icon_path: &Path) -> bool {
 
 /// 恢复系统默认图标。
 pub fn clear_custom_icon(item: &mut DesktopItem) {
-    let icon = load_icon(&item.path, system_image_list());
+    let icon = load_icon_indexed(&item.path, system_image_list()).0;
     if !item.icon.is_null() {
         // SAFETY: 图标句柄由本模块创建。
         unsafe { DestroyIcon(item.icon) };

@@ -37,6 +37,9 @@ mod hotkey_dialog;
 #[path = "litefences_desktop/i18n.rs"]
 mod i18n;
 #[cfg(windows)]
+#[path = "litefences_desktop/icon_cache.rs"]
+mod icon_cache;
+#[cfg(windows)]
 #[path = "litefences_desktop/icons.rs"]
 mod icons;
 #[cfg(windows)]
