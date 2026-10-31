@@ -2781,6 +2781,19 @@ fn draw_banner(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     }
 }
 
+/// 内容坐标里的 y 落在哪个分组区域内（从该组标题到下一组标题）。
+fn group_at_content(headers: &[Header], content_y: i32) -> Option<usize> {
+    let mut result = None;
+    for header in headers {
+        if header.rect.top <= content_y {
+            result = Some(header.group);
+        } else {
+            break;
+        }
+    }
+    result
+}
+
 fn hit_test(x: i32, y: i32) -> Option<usize> {
     let app = state();
     // 格子存的是内容坐标，命中前要把鼠标位置换算到同一坐标系。
@@ -3281,7 +3294,10 @@ unsafe extern "system" fn overlay_proc(
                             .and_then(|index| app.items.get(index))
                             .and_then(|item| crate::groups::group_of(&app.groups, &item.path))
                             .filter(|group| Some(*group) != source_group);
-                        let hover_header = if let Some(group) = group_under_icon {
+                        // 落在某个组的区域里（标题和图标之间的空白也算）同样算目标组。
+                        let group_under_pointer = group_at_content(&app.layout.headers, point.y)
+                            .filter(|group| Some(*group) != source_group);
+                        let hover_header = if let Some(group) = group_under_pointer.or(group_under_icon) {
                             app.layout
                                 .headers
                                 .iter()
@@ -3665,6 +3681,30 @@ unsafe extern "system" fn overlay_proc(
 
 #[cfg(test)]
 mod layout_tests {
+
+    #[test]
+    fn group_at_content_follows_section_boundaries() {
+        let headers = vec![
+            Header {
+                group: 0,
+                rect: RECT { left: 0, top: 100, right: 100, bottom: 130 },
+                count: 2,
+            },
+            Header {
+                group: 1,
+                rect: RECT { left: 0, top: 300, right: 100, bottom: 330 },
+                count: 1,
+            },
+        ];
+        // 第一组标题之前：还不属于任何组
+        assert_eq!(group_at_content(&headers, 50), None);
+        // 第一组区域内（标题下、第二组标题之前）
+        assert_eq!(group_at_content(&headers, 200), Some(0));
+        // 正好在第二组标题上
+        assert_eq!(group_at_content(&headers, 300), Some(1));
+        // 最后一组之后的所有内容都算最后一组
+        assert_eq!(group_at_content(&headers, 900), Some(1));
+    }
     use super::*;
     use crate::groups::Group;
     use crate::icons::{DesktopItem, ItemSource};
