@@ -65,6 +65,14 @@
       <File Id="LicenseTxt" Source="$(var.SourceDir)\LICENSE.txt" Name="LICENSE.txt" KeyPath="yes" />
     </Component>
 
+    <!-- 「设置 → 应用」里的图标：Windows Installer 不会自动填 DisplayIcon，这里自己写。
+         按用户安装时 ARP 在 HKCU，所以写到 HKCU\...\Uninstall\[ProductCode]。 -->
+    <Component Id="ArpDisplayIcon" Directory="INSTALLFOLDER" Guid="2E7B7C1A-8F7E-4A64-9A0D-6C1D3C5E9B41">
+      <RegistryKey Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\[ProductCode]" ForceCreateOnInstall="yes" ForceDeleteOnUninstall="yes">
+        <RegistryValue Type="string" Name="DisplayIcon" Value="[INSTALLFOLDER]LiteFencesDesktop.exe,0" KeyPath="yes" />
+      </RegistryKey>
+    </Component>
+
     <!-- 开始菜单快捷方式；组件的 KeyPath 用注册表值，快捷方式本身不能当 KeyPath。 -->
     <Component Id="StartMenuShortcut" Directory="AppMenuFolder" Guid="D14DDC08-969F-4EAD-8759-5DDB2F3BDE5C">
       <Shortcut Id="StartMenuLink"
@@ -109,6 +117,7 @@
       <ComponentRef Id="LicenseFile" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="ArpDisplayIcon" />
     </Feature>
   </Package>
 </Wix>

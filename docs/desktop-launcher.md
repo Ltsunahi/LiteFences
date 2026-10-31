@@ -561,3 +561,30 @@ INFO 桌面目录：C:\Users\16\Desktop | C:\Users\Public\Desktop
 
 验证：全新数据目录首次启动出现说明卡（截图），收起后 `config.json` 的 `onboarded` 变 true；
 第二次启动截图确认不再出现。
+
+## 2026-10-31：exe 图标与版本信息
+
+之前 exe 没有任何资源：`ProductName / FileVersion / CompanyName` 全空，图标是系统默认的，
+任务栏、资源管理器、快捷方式、MSI 的「设置 → 应用」里都是白板。
+
+现在：
+
+- `packaging/app.ico`：16/24/32/48/64/128/256 七个尺寸（深色圆角底 + 2×2 分组方块）；
+- `build.rs`：Rust 不会编译 `.rc`，这里直接找 Windows SDK 的 `rc.exe`
+  （`RC` 环境变量 → PATH → `Windows Kits\10\bin\<ver>\x64\rc.exe` 取最高版本），
+  现场生成版本资源并 `cargo:rustc-link-arg=...res` 链进 exe；找不到就只打 warning，不阻断构建；
+- 版本信息：ProductName=LiteFences、FileVersion/ProductVersion=0.2.0（取自 `CARGO_PKG_VERSION`）、
+  CompanyName=Ltsunahi、FileDescription=LiteFences 桌面启动器、OriginalFilename、Copyright、项目地址；
+- MSI 补了 `ArpDisplayIcon` 组件，往 `HKCU\...\Uninstall\[ProductCode]` 写 `DisplayIcon`，
+  「设置 → 应用」里的 LiteFences 现在有图标。
+
+踩到的两个坑（都记在 build.rs 注释里）：
+
+1. rc 的字符串里反斜杠是转义，`C:\note\...` 里的 `\n` 会变真换行 → 路径必须写成两遍反斜杠；
+2. 不 include `winver.h` 时，`VS_VERSION_INFO VERSIONINFO` 会被当成**字符串名**，资源 ID 不是 1，
+   `FileVersionInfo` 读不到（枚举能看到 RT_VERSION=16，但读出来是空的）→ 改成数字 `1 VERSIONINFO`；
+3. 中文 VALUE 需要 `#pragma code_page(65001)`，否则 rc 按 ANSI 解析直接报 RC2133。
+
+验证：`FileVersion=0.2.0 / ProductName=LiteFences / CompanyName=Ltsunahi / Desc=LiteFences 桌面启动器`；
+从 exe 里按 256/48/16 提取图标都正确；MSI 重装后 `DisplayIcon` 指向安装目录的 exe；
+`cargo test` 13 项通过，self-test `failures=0`。
