@@ -410,6 +410,7 @@ pub fn show_panel() {
     app.shown_at = Some(Instant::now());
     app.hover = None;
     // 每次唤出都从普通模式开始，避免上次的“移除中”状态残留。
+    // 排障参数：直接选中某个图标，便于截图验证选中框。
     app.remove_mode = false;
     app.pending_remove = None;
     // 面板显示期间不需要全局鼠标钩子；卸载后钩子回调不再和绘制抢 UI 线程。
@@ -599,6 +600,13 @@ pub fn relayout() {
     let top_dip = if app.low_integrity { 88.0 } else { 48.0 };
     let layout = compute_layout(&app.items, &app.groups, width, height, dpi, top_dip);
     app.layout = layout;
+    // 排障：--select=N 等图标就绪后再应用（首次唤出时 items 还是空的）。
+    if let Some(index) = app.options.select
+        && app.selected.is_none()
+        && index < app.items.len()
+    {
+        app.selected = Some(index);
+    }
     app.hover = None;
     // 内容变短了就把滚动量收回来，别停在空白处。
     clamp_scroll(app);
@@ -1496,6 +1504,7 @@ fn paint(hwnd: HWND) {
         if app.drag.is_some_and(|drag| drag.active) {
             draw_drag(hdc, app, &full);
         }
+        draw_selection(hdc, app);
         EndPaint(hwnd, &ps);
     }
 }
@@ -2882,6 +2891,136 @@ pub fn handle_escape() {
         return;
     }
     hide_panel();
+}
+
+/// 键盘：在网格里移动选中项（dx/dy 是格子数）。
+pub fn move_selection(dx: i32, dy: i32) {
+    let app = state();
+    if app.items.is_empty() {
+        return;
+    }
+    let cols = app.layout.cols.max(1) as i32;
+    let total = app.items.len() as i32;
+    let base = app.selected.unwrap_or(0) as i32;
+    let next = (base + dx + dy * cols).clamp(0, total - 1);
+    if app.selected == Some(next as usize) {
+        return;
+    }
+    app.selected = Some(next as usize);
+    ensure_selected_visible(next as usize);
+    // SAFETY: 句柄有效；选中框是每帧画的，整屏重画一帧最省事。
+    unsafe {
+        InvalidateRect(app.overlay, std::ptr::null(), 0);
+        UpdateWindow(app.overlay);
+    }
+}
+
+/// 键盘 Enter：打开当前选中项。
+pub fn open_selected() {
+    let Some(index) = state().selected else {
+        return;
+    };
+    if index < state().items.len() {
+        launch_and_hide(index);
+    }
+}
+
+/// 键盘 Tab / Shift+Tab：跳到下一个分组的第一个图标（顺带展开该组）。
+pub fn cycle_group(back: bool) {
+    let app = state();
+    if app.items.is_empty() || app.groups.is_empty() {
+        return;
+    }
+    let current = app.selected.unwrap_or(0).min(app.items.len() - 1);
+    let path = app.items[current].path.clone();
+    let group = crate::groups::group_of(&app.groups, &path).unwrap_or(0);
+    let count = app.groups.len();
+    let target = if back {
+        (group + count - 1) % count
+    } else {
+        (group + 1) % count
+    };
+    let mut changed = false;
+    if let Some(entry) = app.groups.get_mut(target)
+        && entry.collapsed
+    {
+        entry.collapsed = false;
+        changed = true;
+    }
+    if changed {
+        crate::groups::save(&app.groups);
+        relayout();
+        reshow();
+    }
+    let app = state();
+    if let Some(first) = app
+        .items
+        .iter()
+        .position(|item| crate::groups::group_of(&app.groups, &item.path) == Some(target))
+    {
+        app.selected = Some(first);
+        ensure_selected_visible(first);
+        // SAFETY: 句柄有效。
+        unsafe {
+            InvalidateRect(app.overlay, std::ptr::null(), 0);
+            UpdateWindow(app.overlay);
+        }
+    }
+}
+
+/// 选中的格子滚出可视区时，把滚动量调回来。
+fn ensure_selected_visible(index: usize) {
+    let app = state();
+    let Some(tile) = app.layout.tiles.get(index).copied() else {
+        return;
+    };
+    let scale = app.layout.scale;
+    let pad = (56.0 * scale) as i32;
+    let top = content_top(app) + app.scroll;
+    let bottom = app.layout.height - pad + app.scroll;
+    let mut scroll = app.scroll;
+    if tile.top < top {
+        scroll = tile.top - content_top(app);
+    } else if tile.bottom > bottom {
+        scroll += tile.bottom - bottom;
+    }
+    if scroll != app.scroll {
+        app.scroll = scroll;
+        clamp_scroll(app);
+        app.static_dirty = true;
+    }
+}
+
+/// 键盘选中框：主题强调色描两圈，裁剪到内容区。
+fn draw_selection(hdc: HDC, app: &crate::state::App) {
+    let Some(index) = app.selected else {
+        return;
+    };
+    let Some(tile) = app.layout.tiles.get(index).copied() else {
+        return;
+    };
+    let scale = app.layout.scale;
+    let rect = view_rect(app, tile);
+    // SAFETY: DC 有效；SaveDC/RestoreDC 成对恢复裁剪区。
+    unsafe {
+        let saved = SaveDC(hdc);
+        IntersectClipRect(
+            hdc,
+            0,
+            content_top(app),
+            app.layout.width,
+            app.layout.height - (56.0 * scale) as i32,
+        );
+        draw_outline(hdc, rect, scale, app.theme.accent);
+        let inner = RECT {
+            left: rect.left + 2,
+            top: rect.top + 2,
+            right: rect.right - 2,
+            bottom: rect.bottom - 2,
+        };
+        draw_outline(hdc, inner, scale, app.theme.accent);
+        RestoreDC(hdc, saved);
+    }
 }
 
 fn launch_and_hide(index: usize) {    let app = state();

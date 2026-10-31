@@ -174,6 +174,7 @@ pub fn run() -> std::process::ExitCode {
         theme: crate::theme::by_key(&initial_settings.theme),
         lang_setting: initial_settings.lang.clone(),
         onboarded: crate::store::load().onboarded,
+        selected: None,
         search: String::new(),
         search_open: false,
         search_anim: None,

@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetDoubleClickTime, VK_ESCAPE};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetDoubleClickTime, GetKeyState, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SHIFT,
+    VK_TAB, VK_UP,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetCursorPos, KBDLLHOOKSTRUCT, SetWindowsHookExW, WH_KEYBOARD_LL,
     WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WindowFromPoint,
@@ -103,10 +106,48 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     if code >= 0 && wparam as u32 == WM_KEYDOWN {
         // SAFETY: 低层键盘钩子的 lparam 指向有效 KBDLLHOOKSTRUCT。
         let event = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
-        if event.vkCode == u32::from(VK_ESCAPE) && state().shown {
-            log::info("Esc：退出移除模式或收起面板");
-            overlay::handle_escape();
-            return 1;
+        if state().shown {
+            let vk = event.vkCode;
+            if vk == u32::from(VK_ESCAPE) {
+                log::info("Esc：退出移除模式或收起面板");
+                overlay::handle_escape();
+                return 1;
+            }
+            // 输入框/热键窗口开着时别抢键盘，那些窗口自己处理。
+            if !crate::text_input::is_open() {
+                let handled = match vk {
+                    vk if vk == u32::from(VK_LEFT) => {
+                        overlay::move_selection(-1, 0);
+                        true
+                    }
+                    vk if vk == u32::from(VK_RIGHT) => {
+                        overlay::move_selection(1, 0);
+                        true
+                    }
+                    vk if vk == u32::from(VK_UP) => {
+                        overlay::move_selection(0, -1);
+                        true
+                    }
+                    vk if vk == u32::from(VK_DOWN) => {
+                        overlay::move_selection(0, 1);
+                        true
+                    }
+                    vk if vk == u32::from(VK_RETURN) => {
+                        overlay::open_selected();
+                        true
+                    }
+                    vk if vk == u32::from(VK_TAB) => {
+                        // SAFETY: 只读取按键状态。
+                        let shift = unsafe { GetKeyState(i32::from(VK_SHIFT)) } < 0;
+                        overlay::cycle_group(shift);
+                        true
+                    }
+                    _ => false,
+                };
+                if handled {
+                    return 1;
+                }
+            }
         }
     }
     // SAFETY: 原样传递给下一个钩子。

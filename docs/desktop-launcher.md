@@ -622,3 +622,22 @@ INFO 桌面目录：C:\Users\16\Desktop | C:\Users\Public\Desktop
 踩的坑：一开始想用 `SHIL_JUMBO`（256px）当源、缓存 64px，结果很多小图标在 256px 列表里
 根本不存在，取回来是空白/黑点（截图里 HypoMux、VS Code、微信都成了小方块）。退回
 `SHIL_EXTRALARGE`（48px）+ 48px 缓存，1:1 拷贝，图标全部正常。
+
+## 0.3.0：键盘操作
+
+面板是 `WS_EX_NOACTIVATE` 不抢焦点，键盘事件一直是从全局低级键盘钩子（`WH_KEYBOARD_LL`）来的——
+之前只处理了 Esc。这轮把它扩成完整的一套：
+
+| 按键 | 行为 |
+| --- | --- |
+| 方向键 | 在网格里移动选中（按列数换算），缩出可视区自动滚动 |
+| Enter | 打开选中的图标（复用鼠标单击的 `launch_and_hide`） |
+| Tab / Shift+Tab | 跳到下一个/上一个分组的第一个图标，折叠的组会展开 |
+| Esc | 原有逻辑：先退移除模式 / 清搜索，再收起 |
+
+选中状态存在 `App.selected`，选中框用主题强调色描两圈（裁剪到内容区，不会画到工具条上）。
+
+踩的坑：一开始把 `draw_selection` 插在 `if app.drag.active { draw_drag(...) }` 的花括号里，
+结果只有拖动时才画选中框，截图上一直看不到——移出来就好了。
+
+排障参数：`--select=N` 启动时直接选中第 N 个图标（配合 `--capture` 截图验证用）。

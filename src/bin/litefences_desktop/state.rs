@@ -64,6 +64,8 @@ pub struct Options {
     pub launch_test: Option<String>,
     /// 排障：把面板画面保存成指定 BMP 路径。
     pub capture: Option<String>,
+    /// 排障：启动时直接选中第 N 个图标（验证选中框绘制用）。
+    pub select: Option<usize>,
     /// 命令行直接设置开机自启（`--autostart=on|off`），设置完退出。
     pub autostart: Option<bool>,
     /// 排障：启动后直接弹出某个界面（`--demo=newgroup`）。
@@ -83,6 +85,7 @@ impl Default for Options {
             allow_low_integrity: false,
             launch_test: None,
             capture: None,
+        select: None,
             autostart: None,
             demo: None,
             drop_test: None,
@@ -105,7 +108,9 @@ impl Options {
                     BlurMode::parse(value).ok_or_else(|| format!("未知虚化模式：{value}"))?;
             } else if let Some(value) = arg.strip_prefix("--launch-test=") {
                 options.launch_test = Some(value.to_string());
-            } else if let Some(value) = arg.strip_prefix("--capture=") {
+            } else if let Some(value) = arg.strip_prefix("--select=") {
+            options.select = value.trim().parse().ok();
+        } else if let Some(value) = arg.strip_prefix("--capture=") {
                 options.capture = Some(value.trim_matches('"').to_string());
             } else if let Some(value) = arg.strip_prefix("--autostart=") {
                 options.autostart = match value {
@@ -214,6 +219,8 @@ pub struct App {
     pub lang_setting: String,
     /// 首次使用引导是否已经看过（没看过时面板上多一张说明卡）。
     pub onboarded: bool,
+    /// 键盘选中的图标索引（方向键 / Enter 用）。
+    pub selected: Option<usize>,
     /// 搜索关键字（空 = 不过滤）。
     pub search: String,
     /// 搜索栏是否展开。
