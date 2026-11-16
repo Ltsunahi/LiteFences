@@ -1153,6 +1153,17 @@ unsafe extern "system" fn host_proc(
         }
         WM_APP_SCAN => {
             finish_scan();
+            // 排障：面板就绪后按顺序输入关键字，把匹配结果打进日志。
+            if let Some(query) = state().options.search_test.clone() {
+                for ch in query.chars() {
+                    overlay::type_to_search(ch);
+                }
+                let (count, first) = overlay::search_report();
+                log::info(&format!(
+                    "搜索测试：「{query}」→ {count} 个匹配，第一个={}",
+                    first.as_deref().unwrap_or("（无）")
+                ));
+            }
             0
         }
         WM_TIMER if wparam == TIMER_REHIDE => {

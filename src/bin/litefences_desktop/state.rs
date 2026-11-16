@@ -74,6 +74,8 @@ pub struct Options {
     pub demo: Option<String>,
     /// 排障：把指定路径当成外部拖入投一次，验证拖放链路后退出。
     pub drop_test: Option<String>,
+    /// 排障：唤出面板后依次输入这些字符，打印匹配结果（验证搜索匹配用）。
+    pub search_test: Option<String>,
 }
 
 impl Default for Options {
@@ -92,6 +94,7 @@ impl Default for Options {
             autostart: None,
             demo: None,
             drop_test: None,
+            search_test: None,
         }
     }
 }
@@ -126,7 +129,9 @@ impl Options {
             } else if let Some(value) = arg.strip_prefix("--demo=") {
                 options.demo = Some(value.to_string());
             } else if let Some(value) = arg.strip_prefix("--drop-test=") {
-                options.drop_test = Some(value.trim_matches('"').to_string());
+                options.drop_test = Some(value.trim_matches('\"').to_string());
+            } else if let Some(value) = arg.strip_prefix("--search-test=") {
+                options.search_test = Some(value.trim_matches('\"').to_string());
             } else if let Some(value) = arg.strip_prefix("--show-ms=") {
                 let ms: u32 = value.parse().map_err(|_| "show-ms 取值无效".to_string())?;
                 options.show_ms = Some(ms.clamp(100, 60_000));

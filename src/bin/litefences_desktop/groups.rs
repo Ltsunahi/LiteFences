@@ -82,6 +82,19 @@ pub fn group_of(groups: &[Group], path: &Path) -> Option<usize> {
         .position(|group| group.paths.iter().any(|known| icons::same_path(known, path)))
 }
 
+/// 某个路径在界面上的组序号：没归组的图标由默认组「其它」接住。
+pub fn group_of_or_default(groups: &[Group], path: &Path) -> Option<usize> {
+    if groups.is_empty() {
+        return None;
+    }
+    Some(group_of(groups, path).unwrap_or_else(|| {
+        groups
+            .iter()
+            .position(|group| group.name == DEFAULT_GROUP)
+            .unwrap_or(0)
+    }))
+}
+
 /// 把路径移动到目标组（`None` 表示移到“其它”）。
 pub fn assign(groups: &mut [Group], path: &Path, target: Option<usize>) {
     for group in groups.iter_mut() {
@@ -123,4 +136,19 @@ pub fn create(groups: &mut Vec<Group>, name: &str) -> Option<usize> {
     }
     groups.push(Group::new(name));
     Some(groups.len() - 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ungrouped_path_lands_in_default_group() {
+        let groups = vec![Group::new("常用"), Group::new(DEFAULT_GROUP)];
+        assert_eq!(group_of_or_default(&groups, Path::new(r"C:\x.lnk")), Some(1));
+        let mut known = groups.clone();
+        known[0].paths.push(PathBuf::from(r"C:\x.lnk"));
+        // 路径比较不区分大小写，和面板归组规则保持一致。
+        assert_eq!(group_of_or_default(&known, Path::new(r"c:\X.LNK")), Some(0));
+    }
 }

@@ -360,6 +360,12 @@ pub fn show_panel() {
         top_dip,
     );
     app.layout = layout;
+    if !app.search.is_empty() {
+        // 搜索词在唤出前就已存在（如 --search-test）：沿用紧凑结果布局。
+        let results = search_results(app);
+        app.layout = search_layout(app, &results);
+        app.selected = results.first().copied();
+    }
     // 每次唤出都从顶部开始。
     app.scroll = 0;
 
@@ -597,11 +603,26 @@ fn free_caches() {
 /// 后台扫描完成后重排布局并重绘。
 pub fn relayout() {
     let app = state();
+    if app.search.is_empty() {
+        rebuild_layout(app);
+    } else {
+        // 搜索态下重扫/重命名后仍保持紧凑结果布局。
+        apply_search(app);
+    }
+}
+
+/// 按当前 items/groups 重排；有搜索词时转给 `apply_search` 换成紧凑结果布局。
+fn rebuild_layout(app: &mut crate::state::App) {
     let dpi = app.layout.dpi.max(96);
     let (width, height) = (app.layout.width, app.layout.height);
     let top_dip = if app.low_integrity { 88.0 } else { 48.0 };
     let layout = compute_layout(&app.items, &app.groups, width, height, dpi, top_dip);
     app.layout = layout;
+    // 已有搜索词时（如 --search-test、热重排），重排后立刻换回紧凑结果布局。
+    if !app.search.is_empty() {
+        apply_search(app);
+        return;
+    }
     // 排障：--select=N 等图标就绪后再应用（首次唤出时 items 还是空的）。
     if let Some(index) = app.options.select
         && app.selected.is_none()
@@ -1746,6 +1767,7 @@ fn render_static(hdc: HDC, app: &mut crate::state::App, width: i32, height: i32)
         IntersectClipRect(hdc, 0, content_top(app), width, height);
         draw_headers(hdc, app, &full);
         draw_items(hdc, app, &full);
+        draw_search_empty(hdc, app);
         draw_sticky_header(hdc, app);
         RestoreDC(hdc, saved);
         draw_hint(hdc, app, &full);
@@ -1836,7 +1858,20 @@ fn draw_one_header(hdc: HDC, app: &crate::state::App, header: &Header, rect: REC
     let Some(group) = app.groups.get(header.group) else {
         return;
     };
-    let count = header.count;
+    // 搜索时标题显示命中数，而不是分组总数。
+    let count = if app.search.is_empty() {
+        header.count
+    } else {
+        app.items
+            .iter()
+            .enumerate()
+            .filter(|(index, item)| {
+                visible(app, *index)
+                    && crate::groups::group_of_or_default(&app.groups, &item.path)
+                        == Some(header.group)
+            })
+            .count()
+    };
     let arrow = if group.collapsed { "▶" } else { "▼" };
     let text = wide(&format!(
         "{arrow}  {}  ({count})",
@@ -1871,6 +1906,65 @@ fn draw_one_header(hdc: HDC, app: &crate::state::App, header: &Header, rect: REC
     }
 }
 
+/// 搜索没有命中时，内容区给一句提示，避免只剩空背景。
+fn draw_search_empty(hdc: HDC, app: &crate::state::App) {
+    if app.search.is_empty() || count_matches(app) > 0 {
+        return;
+    }
+    let scale = app.layout.scale;
+    let top = content_top(app);
+    let center = top + (app.layout.height - top) / 2;
+    let title = wide(crate::i18n::t("没有匹配的图标", "No matching icons"));
+    let hint = wide(crate::i18n::t(
+        "换个关键字，或按 Esc 清除搜索",
+        "Try another keyword, or press Esc to clear",
+    ));
+    // SAFETY: DC 有效；字体用完即释放。
+    unsafe {
+        SetBkMode(hdc, TRANSPARENT as i32);
+        SetTextColor(hdc, app.theme.text);
+        let mut title_rect = RECT {
+            left: 0,
+            top: center - (34.0 * scale) as i32,
+            right: app.layout.width,
+            bottom: center - (8.0 * scale) as i32,
+        };
+        DrawTextW(
+            hdc,
+            title.as_ptr(),
+            -1,
+            &mut title_rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
+        let font = create_font(scale, 13.0);
+        let previous = if font.is_null() {
+            std::ptr::null_mut()
+        } else {
+            SelectObject(hdc, font as _)
+        };
+        SetTextColor(hdc, app.theme.text_dim);
+        let mut hint_rect = RECT {
+            left: 0,
+            top: center,
+            right: app.layout.width,
+            bottom: center + (22.0 * scale) as i32,
+        };
+        DrawTextW(
+            hdc,
+            hint.as_ptr(),
+            -1,
+            &mut hint_rect,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
+        if !previous.is_null() {
+            SelectObject(hdc, previous);
+        }
+        if !font.is_null() {
+            DeleteObject(font as _);
+        }
+    }
+}
+
 fn draw_items(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     let scale = app.layout.scale;
     // 注：在玻璃/亚克力表面上无法“擦除”已画像素，所以不做悬停描边，
@@ -1890,6 +1984,9 @@ fn draw_items(hdc: HDC, app: &crate::state::App, paint: &RECT) {
             }
             let icon = app.layout.icon;
             if index == app.items.len() {
+                if !app.search.is_empty() {
+                    continue;
+                }
                 draw_add_tile(hdc, tile, scale, icon, app.theme);
                 continue;
             }
@@ -2231,6 +2328,33 @@ fn draw_drop_hover(hdc: HDC, app: &crate::state::App) {
     draw_headers(hdc, app, &header_rect);
 }
 
+/// 内部拖动悬停在目标组：标题行填色 + 描边，并把被盖住的标题文字补画回来。
+fn draw_drag_header_hover(hdc: HDC, app: &crate::state::App, group: usize) {
+    let Some(header) = app
+        .layout
+        .headers
+        .iter()
+        .find(|header| header.group == group)
+    else {
+        return;
+    };
+    let rect = view_rect(app, header.rect);
+    let inner = RECT {
+        left: rect.left,
+        top: rect.top + 2,
+        right: rect.right,
+        bottom: rect.bottom - 2,
+    };
+    // SAFETY: 画刷用完即释放；填色会盖住标题文字，下面按本帧布局补画。
+    unsafe {
+        let brush = CreateSolidBrush(app.theme.drop_bg);
+        FillRect(hdc, &inner, brush);
+        DeleteObject(brush as _);
+        draw_outline(hdc, inner, app.layout.scale, app.theme.drop_line);
+    }
+    draw_one_header(hdc, app, header, rect, app.layout.scale);
+}
+
 /// 拖动排序的视觉反馈：目标格子描边 + 跟着鼠标的图标。
 fn draw_drag(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     let Some(drag) = app.drag else {
@@ -2249,6 +2373,10 @@ fn draw_drag(hdc: HDC, app: &crate::state::App, paint: &RECT) {
             // SAFETY: DC 有效。
             unsafe { draw_target_outline(hdc, tile, scale, app.theme) };
         }
+    }
+    if let Some(group) = drag.header {
+        // SAFETY: DC 有效；整帧重画时也要把目标组画出来。
+        draw_drag_header_hover(hdc, app, group);
     }
     // SAFETY: DC 有效。
     unsafe { draw_ghost_icon(hdc, app, drag.from, drag.current) };
@@ -2468,10 +2596,9 @@ fn visible(app: &crate::state::App, index: usize) -> bool {
     if app.search.is_empty() {
         return true;
     }
-    let query = app.search.to_lowercase();
     app.items
         .get(index)
-        .is_some_and(|item| item.name.to_lowercase().contains(&query))
+        .is_some_and(|item| crate::search::matches(&item.name, &app.search))
 }
 
 /// 画工具栏里的搜索框：收起时是放大镜，展开后直接在工具条上显示关键字（无底板）。
@@ -2555,6 +2682,145 @@ fn count_matches(app: &crate::state::App) -> usize {
     (0..app.items.len()).filter(|index| visible(app, *index)).count()
 }
 
+/// 搜索结果按得分排序；同分保持面板顺序。
+fn search_results(app: &crate::state::App) -> Vec<usize> {
+    if app.search.is_empty() {
+        return Vec::new();
+    }
+    let mut scored: Vec<(u32, usize)> = app
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            crate::search::score(&item.name, &app.search).map(|score| (score, index))
+        })
+        .collect();
+    scored.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
+    scored.into_iter().map(|(_, index)| index).collect()
+}
+
+/// 唤出后直接敲字母/数字：打开搜索并追加字符，不抢焦点也不触发输入法。
+pub fn type_to_search(ch: char) {
+    let app = state();
+    if crate::text_input::is_open() {
+        return;
+    }
+    if !app.search_open {
+        log::info("唤出后直接打字：进入搜索");
+        app.search_open = true;
+        app.search_anim = None;
+        app.search_typing = false;
+    }
+    app.search.push(ch);
+    apply_search(app);
+}
+
+/// 退格：删一个字；搜索框开着但已经空了就收起来。返回 true 表示按键已处理。
+pub fn search_backspace() -> bool {
+    let app = state();
+    if !app.search.is_empty() {
+        app.search.pop();
+        apply_search(app);
+        return true;
+    }
+    if app.search_open {
+        toggle_search();
+        return true;
+    }
+    false
+}
+
+/// 当前是否有搜索关键字（键盘钩子用）。
+pub fn search_active() -> bool {
+    !state().search.is_empty()
+}
+
+/// 排障：当前关键字下的匹配数量和第一个结果（`--search-test` 用）。
+pub fn search_report() -> (usize, Option<String>) {
+    let app = state();
+    let results = search_results(app);
+    let first = results
+        .first()
+        .and_then(|index| app.items.get(*index))
+        .map(|item| item.name.clone());
+    (results.len(), first)
+}
+
+/// 搜索结果的紧凑网格：只算位置，方便单测。
+fn search_grid(width: i32, cell_w: i32, cell_h: i32, top: i32, count: usize) -> (Vec<RECT>, usize, i32) {
+    // 列数按面板宽度算，不受上一次结果多少影响（否则删字后会卡在少列数）。
+    let capacity = ((width - 80).max(cell_w) / cell_w).max(1) as usize;
+    let cols = capacity.min(count.max(1)).max(1);
+    let grid_w = cols as i32 * cell_w;
+    let origin_x = (width - grid_w) / 2;
+    let tiles = (0..count)
+        .map(|slot| {
+            let row = (slot / cols) as i32;
+            let col = (slot % cols) as i32;
+            let left = origin_x + col * cell_w;
+            let y = top + row * cell_h;
+            RECT {
+                left,
+                top: y,
+                right: left + cell_w,
+                bottom: y + cell_h,
+            }
+        })
+        .collect();
+    let content_height = top + count.div_ceil(cols) as i32 * cell_h;
+    (tiles, cols, content_height)
+}
+
+/// 搜索态布局：只给命中项排格子，隐藏分组标题。
+fn search_layout(app: &crate::state::App, results: &[usize]) -> Layout {
+    let mut layout = app.layout.clone();
+    layout.tiles = vec![
+        RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        app.items.len() + 1
+    ];
+    layout.headers.clear();
+    let top = content_top(app);
+    let (tiles, cols, content_height) =
+        search_grid(layout.width, layout.cell_w, layout.cell_h, top, results.len());
+    layout.cols = cols;
+    layout.content_height = content_height;
+    for (index, tile) in results.iter().zip(tiles) {
+        layout.tiles[*index] = tile;
+    }
+    layout
+}
+
+/// 关键字变化后：换成紧凑结果布局、选中第一个结果，并重画一帧。
+fn apply_search(app: &mut crate::state::App) {
+    if app.search.is_empty() {
+        // 退格删空：恢复分组布局，不突然选中第一项。
+        app.selected = None;
+        rebuild_layout(app);
+        return;
+    }
+    let results = search_results(app);
+    let layout = search_layout(app, &results);
+    app.layout = layout;
+    app.scroll = 0;
+    app.selected = results.first().copied();
+    if let Some(index) = app.selected {
+        ensure_selected_visible(app, index);
+    }
+    app.static_dirty = true;
+    if app.shown {
+        // SAFETY: 句柄有效。
+        unsafe {
+            InvalidateRect(app.overlay, std::ptr::null(), 0);
+            UpdateWindow(app.overlay);
+        }
+    }
+}
+
 /// 让面板临时接收键盘：去掉 NOACTIVATE 并抢到前台，搜索结束时再恢复。
 fn activate_typing() {
     let app = state();
@@ -2599,6 +2865,7 @@ fn toggle_search() {
         app.search_open = false;
         app.search_anim = Some(Instant::now());
         crate::app::set_search_text("");
+        rebuild_layout(app);
     } else {
         app.search_open = true;
         app.search_anim = Some(Instant::now());
@@ -2658,8 +2925,8 @@ fn draw_hint(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     } else {
         (
             crate::i18n::t(
-                "拖动图标排序　·　单击打开　·　拖入文件即加入　·　单击空白处或按 Esc 收起",
-                "Drag to reorder　·　Click to open　·　Drop files to add　·　Click empty space or press Esc to close",
+                "直接打首字母搜索（bdwp = 百度网盘）　·　单击打开　·　拖动排序　·　Esc 收起",
+                "Type initials to search (vsc = Visual Studio Code)　·　Click to open　·　Drag to reorder　·　Esc to close",
             )
             .to_string(),
             theme.hint_bg,
@@ -2794,14 +3061,82 @@ fn group_at_content(headers: &[Header], content_y: i32) -> Option<usize> {
     result
 }
 
+/// 指针（客户区坐标）落在哪个分组区域；只看位置，不排除源组。
+fn group_under_cursor(app: &crate::state::App, x: i32, y: i32) -> Option<usize> {
+    // 工具条和内容区上方留白不算任何分组，避免往下拖经过工具条时误判。
+    if y < content_top(app) {
+        return None;
+    }
+    group_at_content(&app.layout.headers, content_point(app, x, y).y)
+}
+
+/// 落点判定的纯规则：内容坐标属于哪个分组，排除源组，再按 `accepts` 过滤只读入口。
+fn drop_group_at_content(
+    headers: &[Header],
+    content_y: i32,
+    source: usize,
+    accepts: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    group_at_content(headers, content_y)
+        .filter(|group| *group != source)
+        .filter(|group| accepts(*group))
+}
+
+/// 内部拖动时可以落进去的分组：排除源组；文件夹入口是只读视图，不收。
+fn drag_drop_group(app: &crate::state::App, from: usize, x: i32, y: i32) -> Option<usize> {
+    let item = app.items.get(from)?;
+    let source = crate::groups::group_of_or_default(&app.groups, &item.path)?;
+    if y < content_top(app) {
+        return None;
+    }
+    let content_y = content_point(app, x, y).y;
+    drop_group_at_content(&app.layout.headers, content_y, source, |group| {
+        app.groups
+            .get(group)
+            .is_some_and(|entry| entry.portal.is_none())
+    })
+}
+
+/// 目标分组标题行的填充矩形（上下各内缩 2px，给描边留位置）。
+fn drag_header_inner(app: &crate::state::App, group: usize) -> Option<RECT> {
+    let header = app.layout.headers.iter().find(|header| header.group == group)?;
+    let rect = view_rect(app, header.rect);
+    Some(RECT {
+        left: rect.left,
+        top: rect.top + 2,
+        right: rect.right,
+        bottom: rect.bottom - 2,
+    })
+}
+
+/// 按当前指针刷新拖动目标；滚动时指针没动，目标组也会变。
+fn refresh_drag_hover(app: &mut crate::state::App, from: usize, x: i32, y: i32) -> Option<usize> {
+    let group = drag_drop_group(app, from, x, y);
+    let rect = group.and_then(|group| drag_header_inner(app, group));
+    if let Some(mut drag) = app.drag {
+        drag.header = group;
+        drag.header_rect = rect;
+        app.drag = Some(drag);
+    }
+    group
+}
+
 fn hit_test(x: i32, y: i32) -> Option<usize> {
     let app = state();
+    // 工具条覆盖的内容被裁掉了，不算可见图标，避免点到看不见的项。
+    if y < content_top(app) {
+        return None;
+    }
     // 格子存的是内容坐标，命中前要把鼠标位置换算到同一坐标系。
     let y = y + app.scroll;
-    app.layout
-        .tiles
-        .iter()
-        .position(|tile| x >= tile.left && x < tile.right && y >= tile.top && y < tile.bottom)
+    let index = app.layout.tiles.iter().position(|tile| {
+        x >= tile.left && x < tile.right && y >= tile.top && y < tile.bottom
+    })?;
+    // 搜索时「添加图标」不参与命中，避免结果里混进一个无关的方块。
+    if index == app.items.len() && !app.search.is_empty() {
+        return None;
+    }
+    Some(index)
 }
 
 fn within_cooldown() -> bool {
@@ -2896,6 +3231,7 @@ pub fn handle_escape() {
     }
     if !app.search.is_empty() {
         crate::app::set_search_text("");
+        rebuild_layout(app);
         return;
     }
     if app.remove_mode {
@@ -2909,21 +3245,38 @@ pub fn handle_escape() {
     hide_panel();
 }
 
-/// 键盘：在网格里移动选中项（dx/dy 是格子数）。
+/// 键盘：在网格里移动选中项（dx/dy 是格子数）；搜索时改为在结果列表里前后移动。
 pub fn move_selection(dx: i32, dy: i32) {
     let app = state();
     if app.items.is_empty() {
         return;
     }
-    let cols = app.layout.cols.max(1) as i32;
-    let total = app.items.len() as i32;
-    let base = app.selected.unwrap_or(0) as i32;
-    let next = (base + dx + dy * cols).clamp(0, total - 1);
-    if app.selected == Some(next as usize) {
+    let next = if app.search.is_empty() {
+        let cols = app.layout.cols.max(1) as i32;
+        let total = app.items.len() as i32;
+        let base = app.selected.unwrap_or(0) as i32;
+        (base + dx + dy * cols).clamp(0, total - 1) as usize
+    } else {
+        let step = (dx + dy).signum();
+        if step == 0 {
+            return;
+        }
+        let results = search_results(app);
+        if results.is_empty() {
+            return;
+        }
+        let position = app
+            .selected
+            .and_then(|selected| results.iter().position(|index| *index == selected))
+            .unwrap_or(0) as i32;
+        let next = (position + step).clamp(0, results.len() as i32 - 1) as usize;
+        results[next]
+    };
+    if app.selected == Some(next) {
         return;
     }
-    app.selected = Some(next as usize);
-    ensure_selected_visible(next as usize);
+    app.selected = Some(next);
+    ensure_selected_visible(app, next);
     // SAFETY: 句柄有效；选中框是每帧画的，整屏重画一帧最省事。
     unsafe {
         InvalidateRect(app.overlay, std::ptr::null(), 0);
@@ -2931,12 +3284,19 @@ pub fn move_selection(dx: i32, dy: i32) {
     }
 }
 
-/// 键盘 Enter：打开当前选中项。
+/// 键盘 Enter：打开当前选中项；搜索时打开第一个可见结果。
 pub fn open_selected() {
-    let Some(index) = state().selected else {
-        return;
+    let selected = {
+        let app = state();
+        if !app.search.is_empty() {
+            app.selected
+                .filter(|index| visible(app, *index))
+                .or_else(|| search_results(app).first().copied())
+        } else {
+            app.selected.filter(|index| *index < app.items.len())
+        }
     };
-    if index < state().items.len() {
+    if let Some(index) = selected {
         launch_and_hide(index);
     }
 }
@@ -2975,7 +3335,7 @@ pub fn cycle_group(back: bool) {
         .position(|item| crate::groups::group_of(&app.groups, &item.path) == Some(target))
     {
         app.selected = Some(first);
-        ensure_selected_visible(first);
+        ensure_selected_visible(app, first);
         // SAFETY: 句柄有效。
         unsafe {
             InvalidateRect(app.overlay, std::ptr::null(), 0);
@@ -2985,8 +3345,7 @@ pub fn cycle_group(back: bool) {
 }
 
 /// 选中的格子滚出可视区时，把滚动量调回来。
-fn ensure_selected_visible(index: usize) {
-    let app = state();
+fn ensure_selected_visible(app: &mut crate::state::App, index: usize) {
     let Some(tile) = app.layout.tiles.get(index).copied() else {
         return;
     };
@@ -3074,7 +3433,9 @@ fn auto_scroll_tick(hwnd: HWND) {
     }
     app.scroll = next;
     app.static_dirty = true;
-    // SAFETY: 句柄有效；整屏重画一帧，拖拽 ghost 由 paint 负责。
+    // 内容滚了、指针没动，目标组可能已经变了；刷新一次，松手时用最新目标。
+    refresh_drag_hover(app, drag.from, point.x, point.y);
+    // SAFETY: 句柄有效；整屏重画一帧，拖拽 ghost 与目标高亮由 paint 负责。
     unsafe {
         InvalidateRect(hwnd, std::ptr::null(), 0);
         UpdateWindow(hwnd);
@@ -3146,9 +3507,7 @@ unsafe extern "system" fn overlay_proc(
                     && let Some(ch) = char::from_u32(value)
                 {
                     app.search.push(ch);
-                    app.static_dirty = true;
-                    // SAFETY: 句柄有效。
-                    unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
+                    apply_search(app);
                 }
             }
             0
@@ -3156,10 +3515,7 @@ unsafe extern "system" fn overlay_proc(
         WM_KEYDOWN => {
             let app = state();
             if app.search_typing && wparam as u32 == 0x08 {
-                app.search.pop();
-                app.static_dirty = true;
-                // SAFETY: 句柄有效。
-                unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
+                search_backspace();
             }
             0
         }
@@ -3283,33 +3639,14 @@ unsafe extern "system" fn overlay_proc(
                         let new_ghost = ghost_rect(drag.current, icon);
                         let target = hit_test(drag.current.0, drag.current.1)
                             .filter(|index| *index < app.items.len());
-                        let point = content_point(app, drag.current.0, drag.current.1);
-                        // 源图标所在的组：拖到别的组的图标上也应算「移入该组」，
-                        // 不用非得拖到分组标题那一行。
-                        let source_group = app
-                            .items
-                            .get(drag.from)
-                            .and_then(|item| crate::groups::group_of(&app.groups, &item.path));
-                        let group_under_icon = target
-                            .and_then(|index| app.items.get(index))
-                            .and_then(|item| crate::groups::group_of(&app.groups, &item.path))
-                            .filter(|group| Some(*group) != source_group);
-                        // 落在某个组的区域里（标题和图标之间的空白也算）同样算目标组。
-                        let group_under_pointer = group_at_content(&app.layout.headers, point.y)
-                            .filter(|group| Some(*group) != source_group);
-                        let hover_header = if let Some(group) = group_under_pointer.or(group_under_icon) {
-                            app.layout
-                                .headers
-                                .iter()
-                                .find(|header| header.group == group)
-                                .map(|header| (group, view_rect(app, header.rect)))
-                        } else {
-                            app.layout
-                                .headers
-                                .iter()
-                                .find(|header| unsafe { PtInRect(&header.rect, point) != 0 })
-                                .map(|header| (header.group, view_rect(app, header.rect)))
-                        };
+                        // 落点规则和松手时共用：按组区域算，排除源组、只读入口不收。
+                        let hover_header = drag_drop_group(
+                            app,
+                            drag.from,
+                            drag.current.0,
+                            drag.current.1,
+                        )
+                        .and_then(|group| drag_header_inner(app, group).map(|rect| (group, rect)));
                         // 先把缓存刷成当前布局，否则贴回的是旧画面（表现为“涂抹”）。
                         ensure_cache(hwnd);
                         // 直接画，不进 WM_PAINT：先贴回旧区域，再画新的跟随图标/目标框。
@@ -3330,21 +3667,12 @@ unsafe extern "system" fn overlay_proc(
                                 {
                                     draw_target_outline(hdc, view_rect(app, raw), app.layout.scale, app.theme);
                                 }
-                                // 悬停到分组标题：整条高亮，松手就移入。
+                                // 悬停到目标组：标题行填色，松手就移入。
                                 if let Some(old) = drag.header_rect {
                                     blit_region(hdc, app.buffer_dc, old);
                                 }
-                                if let Some((_, rect)) = hover_header {
-                                    let inner = RECT {
-                                        left: rect.left,
-                                        top: rect.top + 2,
-                                        right: rect.right,
-                                        bottom: rect.bottom - 2,
-                                    };
-                                    let brush = CreateSolidBrush(app.theme.drop_bg);
-                                    FillRect(hdc, &inner, brush);
-                                    DeleteObject(brush as _);
-                                    draw_outline(hdc, inner, app.layout.scale, app.theme.drop_line);
+                                if let Some((group, _)) = hover_header {
+                                    draw_drag_header_hover(hdc, app, group);
                                 }
                                 // 缓存里没有工具条，拖动经过时补画，避免被贴成黑块。
                                 let full = RECT {
@@ -3411,13 +3739,19 @@ unsafe extern "system" fn overlay_proc(
                 app.drag_hidden = None;
                 app.static_dirty = true;
                 if drag.active {
-                    if let Some(group) = drag.header {
-                        // 拖到分组标题上：移入该组。
+                    // 以松手位置为准重算目标组：最后一次 mousemove 可能被节流，
+                    // 自动滚动时指针没动、指针下的组也会变。
+                    let group = drag_drop_group(app, drag.from, x, y);
+                    if let Some(group) = group {
                         let path = app
                             .items
                             .get(drag.from)
                             .map(|item| item.path.clone())
                             .unwrap_or_default();
+                        let collapsed = app
+                            .groups
+                            .get(group)
+                            .is_some_and(|entry| entry.collapsed);
                         crate::groups::assign(&mut app.groups, &path, Some(group));
                         crate::groups::save(&app.groups);
                         let name = app
@@ -3425,11 +3759,44 @@ unsafe extern "system" fn overlay_proc(
                             .get(group)
                             .map(|group| group.name.clone())
                             .unwrap_or_default();
+                        if collapsed {
+                            if let Some(entry) = app.groups.get_mut(group) {
+                                entry.collapsed = false;
+                            }
+                            crate::groups::save(&app.groups);
+                            log::info(&format!("目标组「{name}」已折叠，自动展开"));
+                        }
                         log::info(&format!("拖入分组「{name}」：{}", path.display()));
                         crate::app::persist_layout();
                         relayout();
+                        let notice = if crate::i18n::is_en() {
+                            format!("Moved into \"{name}\"")
+                        } else {
+                            format!("已移入「{name}」")
+                        };
+                        show_drop_notice(notice);
+                    } else if let Some(group) = group_under_cursor(app, x, y)
+                        && app
+                            .groups
+                            .get(group)
+                            .is_some_and(|entry| entry.portal.is_some())
+                    {
+                        let name = app
+                            .groups
+                            .get(group)
+                            .map(|group| group.name.clone())
+                            .unwrap_or_default();
+                        log::info(&format!("拖动落点在只读入口「{name}」上，忽略"));
+                        show_drop_notice(
+                            crate::i18n::t(
+                                "入口是只读视图，请拖到其它分组",
+                                "Folder entries are read-only; drop into another group",
+                            )
+                            .to_string(),
+                        );
                     } else if let Some(target) = target
                         && target != drag.from
+                        && app.search.is_empty()
                         && target < app.items.len()
                     {
                         crate::app::move_item(drag.from, target);
@@ -3532,8 +3899,8 @@ unsafe extern "system" fn overlay_proc(
                     unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
                     return 0;
                 }
-                // 搜索栏开着时，点别处先把搜索收起来。
-                if state().search_open {
+                // 搜索栏开着时，点空白处先收起搜索；点结果照常打开。
+                if state().search_open && hit_test(x, y).is_none() {
                     toggle_search();
                     return 0;
                 }
@@ -3705,6 +4072,35 @@ mod layout_tests {
         // 最后一组之后的所有内容都算最后一组
         assert_eq!(group_at_content(&headers, 900), Some(1));
     }
+
+    #[test]
+    fn drop_group_excludes_source_and_read_only_entries() {
+        let headers = vec![
+            Header {
+                group: 0,
+                rect: RECT { left: 0, top: 100, right: 100, bottom: 130 },
+                count: 2,
+            },
+            Header {
+                group: 1,
+                rect: RECT { left: 0, top: 300, right: 100, bottom: 330 },
+                count: 1,
+            },
+            Header {
+                group: 2,
+                rect: RECT { left: 0, top: 500, right: 100, bottom: 530 },
+                count: 1,
+            },
+        ];
+        // 源组是 0 时，落在 0 的区域里不算移入；落在 1 里才算。
+        assert_eq!(drop_group_at_content(&headers, 200, 0, |_| true), None);
+        assert_eq!(drop_group_at_content(&headers, 320, 0, |_| true), Some(1));
+        // 组 2 是只读文件夹入口：即使指针在里面也不接收。
+        assert_eq!(drop_group_at_content(&headers, 600, 0, |group| group != 2), None);
+        // 最后一组之后的内容仍算最后一组。
+        assert_eq!(drop_group_at_content(&headers, 900, 1, |_| true), Some(2));
+    }
+
     use super::*;
     use crate::groups::Group;
     use crate::icons::{DesktopItem, ItemSource};
@@ -3779,5 +4175,25 @@ mod layout_tests {
         check(1920, 1080, 3, 120);
         check(1366, 768, 6, 150);
         check(1280, 720, 8, 200);
+    }
+    #[test]
+    fn search_grid_caps_columns_and_centers_rows() {
+        // 一行放得下时：结果整体居中，列数等于结果数。
+        let (tiles, cols, height) = search_grid(800, 100, 100, 60, 5);
+        assert_eq!(cols, 5);
+        assert_eq!(tiles[0].left, 150);
+        assert_eq!(tiles[4].right, 650);
+        assert_eq!(tiles[0].top, 60);
+        assert_eq!(height, 160);
+        // 超过一行时按宽度上限换行，第二行继续从居中起点排。
+        let (tiles, cols, height) = search_grid(800, 100, 100, 60, 10);
+        assert_eq!(cols, 7);
+        assert_eq!(tiles[7].left, 50);
+        assert_eq!(tiles[7].top, 160);
+        assert_eq!(height, 260);
+        // 0 个结果也要有合法列数，tiles 为空。
+        let (tiles, cols, _) = search_grid(800, 100, 100, 60, 0);
+        assert!(tiles.is_empty());
+        assert_eq!(cols, 1);
     }
 }

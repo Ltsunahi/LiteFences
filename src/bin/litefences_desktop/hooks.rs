@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, GetKeyState, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SHIFT,
-    VK_TAB, VK_UP,
+    GetDoubleClickTime, GetKeyState, VK_BACK, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_LWIN,
+    VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetCursorPos, KBDLLHOOKSTRUCT, SetWindowsHookExW, WH_KEYBOARD_LL,
@@ -114,7 +114,32 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 return 1;
             }
             // 输入框/热键窗口开着时别抢键盘，那些窗口自己处理。
-            if !crate::text_input::is_open() {
+            if !crate::text_input::is_open() && !crate::hotkey_dialog::is_open() {
+                // 唤出后直接打字：不抢焦点，字母/数字直接进搜索框。
+                if !state().search_typing {
+                    // SAFETY: 只读取按键状态。
+                    let (ctrl, alt, win) = unsafe {
+                        (
+                            GetKeyState(i32::from(VK_CONTROL)) < 0,
+                            GetKeyState(i32::from(VK_MENU)) < 0,
+                            GetKeyState(i32::from(VK_LWIN)) < 0
+                                || GetKeyState(i32::from(VK_RWIN)) < 0,
+                        )
+                    };
+                    if !ctrl && !alt && !win {
+                        if vk == u32::from(VK_BACK) && overlay::search_backspace() {
+                            return 1;
+                        }
+                        if vk == 0x20 && overlay::search_active() {
+                            overlay::type_to_search(' ');
+                            return 1;
+                        }
+                        if let Some(ch) = typed_char(vk) {
+                            overlay::type_to_search(ch);
+                            return 1;
+                        }
+                    }
+                }
                 let handled = match vk {
                     vk if vk == u32::from(VK_LEFT) => {
                         overlay::move_selection(-1, 0);
@@ -137,10 +162,15 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                         true
                     }
                     vk if vk == u32::from(VK_TAB) => {
-                        // SAFETY: 只读取按键状态。
-                        let shift = unsafe { GetKeyState(i32::from(VK_SHIFT)) } < 0;
-                        overlay::cycle_group(shift);
-                        true
+                        if overlay::search_active() {
+                            // 搜索时 Tab 不跳分组，避免选中落到被过滤掉的项上。
+                            true
+                        } else {
+                            // SAFETY: 只读取按键状态。
+                            let shift = unsafe { GetKeyState(i32::from(VK_SHIFT)) } < 0;
+                            overlay::cycle_group(shift);
+                            true
+                        }
                     }
                     _ => false,
                 };
@@ -154,8 +184,31 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
 }
 
+/// 只接管字母和数字；组合键、功能键、输入法组合都留给系统。
+fn typed_char(vk: u32) -> Option<char> {
+    match vk {
+        0x30..=0x39 => char::from_u32(vk),
+        0x41..=0x5A => char::from_u32(vk + 0x20),
+        _ => None,
+    }
+}
+
 fn double_click_ms() -> u32 {
     // SAFETY: 无参数，返回系统设置。
     let value = unsafe { GetDoubleClickTime() };
     value.clamp(200, 1200)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_char_takes_letters_and_digits_only() {
+        assert_eq!(typed_char(0x41), Some('a'));
+        assert_eq!(typed_char(0x5A), Some('z'));
+        assert_eq!(typed_char(0x31), Some('1'));
+        assert_eq!(typed_char(0x20), None);
+        assert_eq!(typed_char(0x25), None);
+    }
 }

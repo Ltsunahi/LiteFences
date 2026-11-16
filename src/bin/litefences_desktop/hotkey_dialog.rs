@@ -56,6 +56,11 @@ fn state() -> Option<&'static mut DialogState> {
     slot().as_mut()
 }
 
+/// 热键设置窗口是否开着（全局键盘钩子据此避让）。
+pub fn is_open() -> bool {
+    state().is_some()
+}
+
 /// 打开设置窗口；用户按下组合键返回 Some，取消返回 None。
 pub fn ask_for_hotkey(current: Hotkey) -> Option<Hotkey> {
     // 每次打开都换一份干净状态，第二次改热键才不会直接复用上次的结果。

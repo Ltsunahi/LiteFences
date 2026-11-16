@@ -58,6 +58,9 @@ mod picker;
 #[path = "litefences_desktop/portals.rs"]
 mod portals;
 #[cfg(windows)]
+#[path = "litefences_desktop/search.rs"]
+mod search;
+#[cfg(windows)]
 #[path = "litefences_desktop/settings.rs"]
 mod settings;
 #[cfg(windows)]
