@@ -1,7 +1,11 @@
-//! 搜索匹配：名字子串 + 英文单词首字母 + 中文拼音首字母。
+//! 搜索匹配：名字子串 + 英文缩写 + 中文拼音首字母 / 全拼。
 //!
-//! 拼音首字母不依赖词库：GB2312 一级汉字按拼音排序，用 `WideCharToMultiByte(936)`
-//! 拿到 GBK 编码后查声母边界即可。只覆盖常用汉字；生僻字按原字符处理。
+//! 拼音表（`pinyin_data.txt`）由 Windows 自带的单字拼音表生成，每个字保留全部常见读音。
+//! 因此「重庆」既能用 `zq`、也能用 `cq` / `chongqing` 命中，「银行」同时支持
+//! `yinhang` / `yinxing`。表里没有的生僻字退回 GB2312 声母边界表，只保证首字母。
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use windows_sys::Win32::Globalization::WideCharToMultiByte;
 
@@ -34,6 +38,39 @@ const INITIAL_BOUNDS: [(u16, u8); 23] = [
 
 /// 一级汉字的结束编码；再往后是按部首排序的生僻字，不能按拼音推断。
 const INITIAL_END: u16 = 0xD7F9;
+
+/// 多音字组合的上限，避免长名字里多个多音字把组合数放大。
+const MAX_VARIANTS: usize = 24;
+
+/// 内置拼音表：`字<TAB>读音1,读音2`，构建一次后常驻。
+fn pinyin_table() -> &'static HashMap<char, Vec<&'static str>> {
+    static TABLE: OnceLock<HashMap<char, Vec<&'static str>>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let data = include_str!("pinyin_data.txt");
+        let mut table = HashMap::with_capacity(7000);
+        for line in data.lines() {
+            let Some((ch, readings)) = line.split_once('\t') else {
+                continue;
+            };
+            let Some(ch) = ch.chars().next() else {
+                continue;
+            };
+            table.insert(
+                ch,
+                readings.split(',').filter(|value| !value.is_empty()).collect(),
+            );
+        }
+        table
+    })
+}
+
+/// 一个字的全部常见读音（无音调、小写）。
+fn readings(ch: char) -> &'static [&'static str] {
+    pinyin_table()
+        .get(&ch)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
 
 /// 单个汉字的拼音声母；非汉字或生僻字返回 None。
 fn initial_of(ch: char) -> Option<char> {
@@ -73,9 +110,79 @@ fn initial_of(ch: char) -> Option<char> {
     letter
 }
 
+/// 把每个字的候选拼起来，得到有限个组合。
+fn combine(parts: &[Vec<String>]) -> Vec<String> {
+    let mut keys = vec![String::new()];
+    for choices in parts {
+        if choices.is_empty() {
+            continue;
+        }
+        let mut next = Vec::with_capacity((keys.len() * choices.len()).min(MAX_VARIANTS));
+        'outer: for key in &keys {
+            for choice in choices {
+                if next.len() >= MAX_VARIANTS {
+                    break 'outer;
+                }
+                let mut value = key.clone();
+                value.push_str(choice);
+                next.push(value);
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        keys = next;
+    }
+    keys
+}
+
+/// 全拼组合：`重庆` → `zhongqing` / `chongqing`，ASCII 原样拼进去。
+fn full_pinyin_keys(text: &str) -> Vec<String> {
+    let mut parts: Vec<Vec<String>> = Vec::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            parts.push(vec![ch.to_ascii_lowercase().to_string()]);
+        } else if !readings(ch).is_empty() {
+            parts.push(readings(ch).iter().map(|value| value.to_string()).collect());
+        }
+        // 空格、标点和拼音表里没有的字直接断开。
+    }
+    combine(&parts)
+}
+
+/// 缩写组合：中文按每个字的声母，英文按单词首字母。
+fn acronym_keys(text: &str) -> Vec<String> {
+    let mut parts: Vec<Vec<String>> = Vec::new();
+    let mut word_start = true;
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if word_start {
+                parts.push(vec![ch.to_ascii_lowercase().to_string()]);
+            }
+            word_start = false;
+        } else if !readings(ch).is_empty() {
+            parts.push(
+                readings(ch)
+                    .iter()
+                    .filter_map(|value| value.chars().next())
+                    .map(|value| value.to_ascii_lowercase().to_string())
+                    .collect(),
+            );
+            word_start = true;
+        } else if let Some(letter) = initial_of(ch) {
+            parts.push(vec![letter.to_ascii_lowercase().to_string()]);
+            word_start = true;
+        } else {
+            word_start = true;
+        }
+    }
+    combine(&parts)
+}
+
 /// 搜索键：英文按单词取首字母，中文按每个字取拼音声母。
 ///
 /// 例：`Visual Studio Code` → `vsc`，`百度网盘` → `bdwp`。
+#[allow(dead_code)]
 pub fn initials(text: &str) -> String {
     let mut key = String::new();
     let mut word_start = true;
@@ -85,6 +192,9 @@ pub fn initials(text: &str) -> String {
                 key.push(ch.to_ascii_lowercase());
             }
             word_start = false;
+        } else if let Some(first) = readings(ch).first().and_then(|value| value.chars().next()) {
+            key.push(first.to_ascii_lowercase());
+            word_start = true;
         } else if let Some(letter) = initial_of(ch) {
             key.push(letter.to_ascii_lowercase());
             word_start = true;
@@ -104,12 +214,14 @@ fn compact(text: &str) -> String {
         .collect()
 }
 
-/// 拼音键：汉字取声母，ASCII 原样保留，便于「百度 Netdisk」这类中英混排。
+/// 拼音键：汉字取第一个读音的声母，ASCII 原样保留，便于「百度 Netdisk」这类中英混排。
 fn pinyin_key(text: &str) -> String {
     let mut key = String::new();
     for ch in text.chars() {
         if ch.is_ascii_alphanumeric() {
             key.push(ch.to_ascii_lowercase());
+        } else if let Some(first) = readings(ch).first().and_then(|value| value.chars().next()) {
+            key.push(first.to_ascii_lowercase());
         } else if let Some(letter) = initial_of(ch) {
             key.push(letter.to_ascii_lowercase());
         }
@@ -119,7 +231,7 @@ fn pinyin_key(text: &str) -> String {
 
 /// 匹配得分：分数越高越靠前；None 表示不匹配。
 ///
-/// 顺序：名字完全匹配 > 名字前缀 > 名字子串 > 紧凑/拼音/缩写。
+/// 顺序：名字完全匹配 > 名字前缀 > 名字子串 > 紧凑 > 全拼 > 拼音声母 > 缩写。
 pub fn score(name: &str, query: &str) -> Option<u32> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
@@ -135,7 +247,7 @@ pub fn score(name: &str, query: &str) -> Option<u32> {
     if lower.contains(&query) {
         return Some(800);
     }
-    // 紧凑/拼音/缩写只对 ASCII 关键字有意义，中文关键字走上面的原文子串。
+    // 下面的匹配只对 ASCII 关键字有意义，中文关键字走上面的原文子串。
     if !query.chars().all(|ch| ch.is_ascii_alphanumeric()) {
         return None;
     }
@@ -146,6 +258,13 @@ pub fn score(name: &str, query: &str) -> Option<u32> {
     if compact.starts_with(&query) {
         return Some(760);
     }
+    let full = full_pinyin_keys(name);
+    if full.iter().any(|key| key == &query) {
+        return Some(745);
+    }
+    if full.iter().any(|key| key.starts_with(&query)) {
+        return Some(730);
+    }
     let pinyin = pinyin_key(name);
     if pinyin == query {
         return Some(720);
@@ -153,20 +272,23 @@ pub fn score(name: &str, query: &str) -> Option<u32> {
     if pinyin.starts_with(&query) {
         return Some(700);
     }
+    if full.iter().any(|key| key.contains(&query)) {
+        return Some(680);
+    }
     if pinyin.contains(&query) {
         return Some(640);
     }
-    let acronym = initials(name);
-    if acronym == query {
+    let acronyms = acronym_keys(name);
+    if acronyms.iter().any(|key| key == &query) {
         return Some(600);
     }
-    if acronym.starts_with(&query) {
-        return Some(580);
+    if acronyms.iter().any(|key| key.starts_with(&query)) {
+        return Some(585);
     }
     if compact.contains(&query) {
         return Some(540);
     }
-    if acronym.contains(&query) {
+    if acronyms.iter().any(|key| key.contains(&query)) {
         return Some(480);
     }
     None
@@ -206,5 +328,21 @@ mod tests {
         assert!(matches("Visual Studio Code", "studio"));
         assert!(matches("Visual Studio Code", "visualstudiocode"));
         assert!(matches("任意名字", ""));
+    }
+
+    #[test]
+    fn full_pinyin_and_polyphones() {
+        assert!(matches("重庆", "chongqing"));
+        assert!(matches("重庆", "cq"));
+        assert!(matches("重庆", "zq"));
+        assert!(matches("北京", "beijing"));
+        assert!(matches("微信", "weixin"));
+        assert!(matches("百度网盘", "baiduwangpan"));
+        assert!(matches("长江", "changjiang"));
+        assert!(matches("长江", "zhangjiang"));
+        assert!(matches("银行", "yinhang"));
+        assert!(matches("银行", "yinxing"));
+        assert!(matches("音乐", "yinyue"));
+        assert!(!matches("百度网盘", "weixin"));
     }
 }

@@ -25,6 +25,9 @@ mod desktop_icons;
 #[path = "litefences_desktop/drop_target.rs"]
 mod drop_target;
 #[cfg(windows)]
+#[path = "litefences_desktop/file_actions.rs"]
+mod file_actions;
+#[cfg(windows)]
 #[path = "litefences_desktop/groups.rs"]
 mod groups;
 #[cfg(windows)]
@@ -78,6 +81,9 @@ mod text_input;
 #[cfg(windows)]
 #[path = "litefences_desktop/tray.rs"]
 mod tray;
+#[cfg(windows)]
+#[path = "litefences_desktop/update.rs"]
+mod update;
 #[cfg(windows)]
 #[path = "litefences_desktop/util.rs"]
 mod util;

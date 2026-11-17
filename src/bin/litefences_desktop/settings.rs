@@ -70,6 +70,8 @@ pub struct Settings {
     pub theme: String,
     /// `auto`（跟随系统）/ `zh` / `en`。
     pub lang: String,
+    /// 是否自动检查更新。
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -78,6 +80,7 @@ impl Default for Settings {
             hotkey: Hotkey::default(),
             theme: "space".to_string(),
             lang: "auto".to_string(),
+            check_updates: true,
         }
     }
 }
@@ -98,6 +101,7 @@ pub fn load() -> Settings {
     if !section.lang.trim().is_empty() {
         settings.lang = section.lang;
     }
+    settings.check_updates = section.check_updates;
     settings
 }
 
@@ -108,6 +112,7 @@ pub fn save(settings: &Settings) {
         hotkey_key: settings.hotkey.key,
         theme: settings.theme.clone(),
         lang: settings.lang.clone(),
+        check_updates: settings.check_updates,
     };
     crate::store::save(&config);
     log::info(&format!(

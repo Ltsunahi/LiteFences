@@ -64,8 +64,8 @@ pub struct Options {
     pub launch_test: Option<String>,
     /// 排障：把面板画面保存成指定 BMP 路径。
     pub capture: Option<String>,
-    /// 排障：启动时直接选中第 N 个图标（验证选中框绘制用）。
-    pub select: Option<usize>,
+    /// 排障：启动时直接选中若干图标（逗号分隔，验证多选框绘制用）。
+    pub select: Option<Vec<usize>>,
     /// 排障：强制显示「没有桌面图标」提示（截图验证用）。
     pub empty: bool,
     /// 命令行直接设置开机自启（`--autostart=on|off`），设置完退出。
@@ -76,6 +76,8 @@ pub struct Options {
     pub drop_test: Option<String>,
     /// 排障：唤出面板后依次输入这些字符，打印匹配结果（验证搜索匹配用）。
     pub search_test: Option<String>,
+    /// 排障：同步请求一次 GitHub Releases，打印解析结果后退出。
+    pub update_test: bool,
 }
 
 impl Default for Options {
@@ -89,12 +91,13 @@ impl Default for Options {
             allow_low_integrity: false,
             launch_test: None,
             capture: None,
-        select: None,
-        empty: false,
+            select: None,
+            empty: false,
             autostart: None,
             demo: None,
             drop_test: None,
             search_test: None,
+            update_test: false,
         }
     }
 }
@@ -115,10 +118,16 @@ impl Options {
             } else if let Some(value) = arg.strip_prefix("--launch-test=") {
                 options.launch_test = Some(value.to_string());
             } else if arg == "--empty" {
-            options.empty = true;
-        } else if let Some(value) = arg.strip_prefix("--select=") {
-            options.select = value.trim().parse().ok();
-        } else if let Some(value) = arg.strip_prefix("--capture=") {
+                options.empty = true;
+            } else if let Some(value) = arg.strip_prefix("--select=") {
+                let indices: Vec<usize> = value
+                    .split(',')
+                    .filter_map(|part| part.trim().parse().ok())
+                    .collect();
+                if !indices.is_empty() {
+                    options.select = Some(indices);
+                }
+            } else if let Some(value) = arg.strip_prefix("--capture=") {
                 options.capture = Some(value.trim_matches('"').to_string());
             } else if let Some(value) = arg.strip_prefix("--autostart=") {
                 options.autostart = match value {
@@ -132,6 +141,8 @@ impl Options {
                 options.drop_test = Some(value.trim_matches('\"').to_string());
             } else if let Some(value) = arg.strip_prefix("--search-test=") {
                 options.search_test = Some(value.trim_matches('\"').to_string());
+            } else if arg == "--update-test" {
+                options.update_test = true;
             } else if let Some(value) = arg.strip_prefix("--show-ms=") {
                 let ms: u32 = value.parse().map_err(|_| "show-ms 取值无效".to_string())?;
                 options.show_ms = Some(ms.clamp(100, 60_000));
@@ -177,6 +188,21 @@ pub struct HeaderDragState {
     pub target: Option<usize>,
 }
 
+/// 单步撤销快照：记录改动前的面板数据，撤销时重新扫描并按快照恢复。
+#[derive(Clone)]
+pub struct UndoSnapshot {
+    /// 给用户看的操作名，例如「移除」「移到分组」。
+    pub label: &'static str,
+    /// 只含普通分组；入口组撤销时按 portals 重建。
+    pub groups: Vec<crate::groups::Group>,
+    pub custom: Vec<std::path::PathBuf>,
+    pub hidden: Vec<std::path::PathBuf>,
+    /// 非入口项：(路径, 显示名, 自定义图标)。
+    pub items: Vec<(std::path::PathBuf, String, Option<std::path::PathBuf>)>,
+    pub selected: Option<usize>,
+    pub selection: Vec<usize>,
+}
+
 pub struct App {
     pub host: HWND,
     pub overlay: HWND,
@@ -205,6 +231,12 @@ pub struct App {
     pub drag: Option<DragState>,
     /// 拖动分组标题调整顺序。
     pub header_drag: Option<HeaderDragState>,
+    /// 鼠标多选：Ctrl 点选追加/取消，Shift 连选。
+    pub selection: Vec<usize>,
+    /// 连选起点。
+    pub selection_anchor: Option<usize>,
+    /// 单步撤销快照（Ctrl+Z）。
+    pub undo: Option<UndoSnapshot>,
     /// 拖动时暂时从静态帧里隐藏的项（让图标“浮起来”，避免重影）。
     pub drag_hidden: Option<usize>,
     /// 右键“待确认移除”的项与时间（面板内二次确认，不弹窗）。
@@ -233,6 +265,8 @@ pub struct App {
     pub selected: Option<usize>,
     /// 搜索关键字（空 = 不过滤）。
     pub search: String,
+    /// 是否自动检查更新（可在托盘菜单关闭）。
+    pub check_updates: bool,
     /// 搜索栏是否展开。
     pub search_open: bool,
     /// 搜索栏展开/收起的动画起点。

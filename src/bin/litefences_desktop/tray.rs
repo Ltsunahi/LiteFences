@@ -2,7 +2,8 @@
 
 use windows_sys::Win32::Foundation::{GetLastError, HWND};
 use windows_sys::Win32::UI::Shell::{
-    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_INFO, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NIM_SETVERSION,
     NOTIFYICONDATAW, NOTIFYICON_VERSION_4, Shell_NotifyIconW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -21,10 +22,14 @@ pub const MENU_EXIT: usize = 1003;
 pub const MENU_AUTOSTART: usize = 1005;
 pub const MENU_HOTKEY: usize = 1006;
 pub const MENU_ADD_PORTAL: usize = 1007;
+pub const MENU_CHECK_UPDATE: usize = 1008;
+pub const MENU_AUTO_UPDATE: usize = 1009;
 /// 主题菜单项的起始编号：`MENU_THEME_BASE + 主题序号`。
 pub const MENU_THEME_BASE: usize = 1100;
 /// 语言菜单项：跟随系统 / 中文 / English。
 pub const MENU_LANG_BASE: usize = 1300;
+/// 用户点击托盘气泡时 `lparam` 低 16 位里的通知码。
+pub const NIN_BALLOONUSERCLICK: u32 = 1029;
 
 /// Explorer 重启后会广播 `TaskbarCreated`，收到后必须重新添加托盘图标。
 pub fn taskbar_created_message() -> u32 {
@@ -93,6 +98,28 @@ pub fn remove(host: HWND) {
     unsafe { Shell_NotifyIconW(NIM_DELETE, &data) };
 }
 
+/// 弹一个托盘气泡（标题最多 63 字，正文最多 255 字，超出截断）。
+pub fn notify(host: HWND, title: &str, text: &str) {
+    let mut data = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: host,
+        uID: 1,
+        uFlags: NIF_INFO,
+        dwInfoFlags: NIIF_INFO,
+        ..Default::default()
+    };
+    // 该联合字段在 NIF_INFO 下表示超时时间。
+    data.Anonymous.uTimeout = 8000;
+    for (slot, ch) in data.szInfoTitle.iter_mut().zip(title.encode_utf16().take(63)) {
+        *slot = ch;
+    }
+    for (slot, ch) in data.szInfo.iter_mut().zip(text.encode_utf16().take(255)) {
+        *slot = ch;
+    }
+    // SAFETY: 结构体与窗口句柄有效；NIM_MODIFY 只改已有托盘项。
+    unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
+}
+
 /// 弹出右键菜单并返回被选中的命令；0 表示取消。
 pub fn show_menu(
     host: HWND,
@@ -100,6 +127,7 @@ pub fn show_menu(
     hotkey_text: &str,
     theme_key: &str,
     lang_setting: &str,
+    check_updates: bool,
 ) -> usize {
     let menu = unsafe { CreatePopupMenu() };
     if menu.is_null() {
@@ -135,6 +163,20 @@ pub fn show_menu(
             "Add folder entry… (read-only view)",
         ));
         AppendMenuW(menu, MF_STRING, MENU_ADD_PORTAL, add_portal.as_ptr());
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+        let check = wide(crate::i18n::t("检查更新…", "Check for updates…"));
+        let auto_update = wide(if check_updates {
+            crate::i18n::t("自动检查更新（已开启）", "Check automatically (on)")
+        } else {
+            crate::i18n::t("自动检查更新（已关闭）", "Check automatically (off)")
+        });
+        AppendMenuW(menu, MF_STRING, MENU_CHECK_UPDATE, check.as_ptr());
+        let auto_flags = if check_updates {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        AppendMenuW(menu, auto_flags, MENU_AUTO_UPDATE, auto_update.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         // 主题：每个预设一项，当前项打勾。
         let theme_labels: Vec<_> = crate::theme::THEMES

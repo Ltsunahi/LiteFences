@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, GetKeyState, VK_BACK, VK_CONTROL, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_LWIN,
-    VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
+    GetDoubleClickTime, GetKeyState, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_ESCAPE,
+    VK_LEFT, VK_LWIN, VK_MENU, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_TAB, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetCursorPos, KBDLLHOOKSTRUCT, SetWindowsHookExW, WH_KEYBOARD_LL,
@@ -115,6 +115,17 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             }
             // 输入框/热键窗口开着时别抢键盘，那些窗口自己处理。
             if !crate::text_input::is_open() && !crate::hotkey_dialog::is_open() {
+                // Ctrl+Z：撤销最近一步（拖动落错组、误移除、改名等）。
+                // SAFETY: 只读取按键状态。
+                let ctrl_held = unsafe { GetKeyState(i32::from(VK_CONTROL)) < 0 };
+                if ctrl_held && vk == 0x5A && !state().search_typing {
+                    overlay::undo_last();
+                    return 1;
+                }
+                // Delete：移除多选（或键盘选中）的项。
+                if vk == u32::from(VK_DELETE) && overlay::remove_selection() {
+                    return 1;
+                }
                 // 唤出后直接打字：不抢焦点，字母/数字直接进搜索框。
                 if !state().search_typing {
                     // SAFETY: 只读取按键状态。

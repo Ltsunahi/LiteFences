@@ -28,12 +28,15 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::UI::Controls::MARGINS;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_SHIFT,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_DBLCLKS, CreatePopupMenu, CreateWindowExW, DI_NORMAL, DefWindowProcW,
     DestroyMenu, DestroyWindow, DrawIconEx, GetCursorPos, GetWindowLongPtrW, GetWindowRect,
     GWL_EXSTYLE, HTCLIENT, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, KillTimer, LoadCursorW,
-    MA_NOACTIVATE, MF_CHECKED, MF_SEPARATOR, MF_STRING, RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE,
+    MA_NOACTIVATE, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MF_STRING, RegisterClassW, SW_HIDE,
+    SW_SHOWNOACTIVATE,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN,
     TrackPopupMenu, WM_CHAR, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK,
@@ -421,6 +424,8 @@ pub fn show_panel() {
     // 排障参数：直接选中某个图标，便于截图验证选中框。
     app.remove_mode = false;
     app.pending_remove = None;
+    app.selection.clear();
+    app.selection_anchor = None;
     // 面板显示期间不需要全局鼠标钩子；卸载后钩子回调不再和绘制抢 UI 线程。
     if app.mouse_hook != 0 {
         crate::hooks::remove_mouse(app.mouse_hook);
@@ -554,6 +559,8 @@ pub fn hide_panel() {
     app.anim_started = None;
     app.drag = None;
     app.header_drag = None;
+    app.selection.clear();
+    app.selection_anchor = None;
     app.drag_hidden = None;
     app.pending_remove = None;
     app.drop_hover = None;
@@ -624,11 +631,19 @@ fn rebuild_layout(app: &mut crate::state::App) {
         return;
     }
     // 排障：--select=N 等图标就绪后再应用（首次唤出时 items 还是空的）。
-    if let Some(index) = app.options.select
+    if let Some(indices) = app.options.select.clone()
         && app.selected.is_none()
-        && index < app.items.len()
+        && app.selection.is_empty()
     {
-        app.selected = Some(index);
+        let valid: Vec<usize> = indices
+            .into_iter()
+            .filter(|index| *index < app.items.len())
+            .collect();
+        app.selected = valid.first().copied();
+        if valid.len() > 1 {
+            app.selection_anchor = valid.first().copied();
+            app.selection = valid;
+        }
     }
     app.hover = None;
     // 内容变短了就把滚动量收回来，别停在空白处。
@@ -719,6 +734,7 @@ fn move_group(from: usize, to: usize) {
     if target == from || target >= app.groups.len() {
         return;
     }
+    crate::app::remember_undo("group");
     let name = app.groups[from].name.clone();
     let group = app.groups.remove(from);
     app.groups.insert(target, group);
@@ -737,6 +753,7 @@ fn create_group() {
         return;
     };
     let app = state();
+    crate::app::remember_undo("group");
     let Some(index) = crate::groups::create(&mut app.groups, &name) else {
         return;
     };
@@ -766,49 +783,107 @@ fn toggle_group(index: usize) {
     relayout();
 }
 
-/// 右键图标：选择要移入的分组，或新建一个。
-fn open_group_menu(item_index: usize) {
+/// 右键图标：选择要移入的分组、新建分组，或做文件操作。多选时动作作用于整组。
+fn open_group_menu(indices: &[usize]) {
     let app = state();
-    let Some(item) = app.items.get(item_index) else {
+    let Some(&anchor) = indices.first() else {
         return;
     };
-    if item.source == icons::ItemSource::Portal {
+    let Some(anchor_item) = app.items.get(anchor) else {
+        return;
+    };
+    if anchor_item.source == icons::ItemSource::Portal {
         log::info("入口是只读视图：请右键入口标题管理（重命名/折叠/移除）");
         return;
     }
-    let path = item.path.clone();
-    let current = crate::groups::group_of(&app.groups, &path);
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    for &index in indices {
+        let Some(item) = app.items.get(index) else {
+            continue;
+        };
+        if item.source == icons::ItemSource::Portal {
+            continue;
+        }
+        if paths.iter().any(|known| icons::same_path(known, &item.path)) {
+            continue;
+        }
+        paths.push(item.path.clone());
+    }
+    if paths.is_empty() {
+        return;
+    }
+    let multi = paths.len() > 1;
+    let current = if multi {
+        None
+    } else {
+        crate::groups::group_of(&app.groups, &paths[0])
+    };
+    let labels: Vec<_> = app
+        .groups
+        .iter()
+        .map(|group| {
+            wide(&if crate::i18n::is_en() {
+                format!("Move to \"{}\"", crate::groups::display_name(&group.name))
+            } else {
+                format!("移到「{}」", crate::groups::display_name(&group.name))
+            })
+        })
+        .collect();
     // SAFETY: 菜单句柄在函数末尾释放；字符串在调用期间保持存活。
     unsafe {
         let menu = CreatePopupMenu();
         if menu.is_null() {
             return;
         }
-        let labels: Vec<_> = app
-            .groups
-            .iter()
-            .map(|group| {
-                wide(&if crate::i18n::is_en() {
-                    format!("Move to \"{}\"", crate::groups::display_name(&group.name))
-                } else {
-                    format!("移到「{}」", crate::groups::display_name(&group.name))
-                })
-            })
-            .collect();
-        let new_label = wide(crate::i18n::t("新建分组并移入…", "New group and move…"));
-        let rename_label = wide(crate::i18n::t("重命名…", "Rename…"));
-        let icon_label = wide(crate::i18n::t("更换图标…", "Change icon…"));
-        let reset_icon_label = wide(crate::i18n::t("恢复默认图标", "Reset icon"));
-        AppendMenuW(menu, MF_STRING, 2, rename_label.as_ptr());
-        if app
-            .items
-            .get(item_index)
-            .and_then(|item| item.custom_icon.as_ref())
-            .is_some()
-        {
-            AppendMenuW(menu, MF_STRING, 4, reset_icon_label.as_ptr());
+        if multi {
+            let header = wide(&if crate::i18n::is_en() {
+                format!("{} items selected", paths.len())
+            } else {
+                format!("已选 {} 项", paths.len())
+            });
+            AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, header.as_ptr());
+            AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+        } else {
+            let rename_label = wide(crate::i18n::t("重命名…", "Rename…"));
+            let icon_label = wide(crate::i18n::t("更换图标…", "Change icon…"));
+            let reset_icon_label = wide(crate::i18n::t("恢复默认图标", "Reset icon"));
+            AppendMenuW(menu, MF_STRING, 2, rename_label.as_ptr());
+            if app
+                .items
+                .get(anchor)
+                .and_then(|item| item.custom_icon.as_ref())
+                .is_some()
+            {
+                AppendMenuW(menu, MF_STRING, 4, reset_icon_label.as_ptr());
+            }
+            AppendMenuW(menu, MF_STRING, 3, icon_label.as_ptr());
+            AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         }
-        AppendMenuW(menu, MF_STRING, 3, icon_label.as_ptr());
+        let reveal_label = wide(crate::i18n::t("打开所在位置", "Show in Explorer"));
+        let properties_label = wide(crate::i18n::t("属性", "Properties"));
+        let copy_label = wide(&if multi {
+            if crate::i18n::is_en() {
+                format!("Copy {} paths", paths.len())
+            } else {
+                format!("复制 {} 条路径", paths.len())
+            }
+        } else {
+            crate::i18n::t("复制路径", "Copy path").to_string()
+        });
+        AppendMenuW(menu, MF_STRING, 30, reveal_label.as_ptr());
+        AppendMenuW(menu, MF_STRING, 31, properties_label.as_ptr());
+        AppendMenuW(menu, MF_STRING, 32, copy_label.as_ptr());
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+        let remove_label = wide(&if multi {
+            if crate::i18n::is_en() {
+                format!("Remove {} items from panel", paths.len())
+            } else {
+                format!("从面板移除所选 {} 项", paths.len())
+            }
+        } else {
+            crate::i18n::t("从面板移除", "Remove from panel").to_string()
+        });
+        AppendMenuW(menu, MF_STRING, 33, remove_label.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         for (index, label) in labels.iter().enumerate() {
             let flags = if current == Some(index) {
@@ -819,6 +894,7 @@ fn open_group_menu(item_index: usize) {
             AppendMenuW(menu, flags, 200 + index, label.as_ptr());
         }
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+        let new_label = wide(crate::i18n::t("新建分组并移入…", "New group and move…"));
         AppendMenuW(menu, MF_STRING, 1, new_label.as_ptr());
 
         let overlay = app.overlay;
@@ -853,7 +929,7 @@ fn open_group_menu(item_index: usize) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         );
         DestroyMenu(menu);
-        apply_group_command(command as usize, &path, item_index);
+        apply_group_command(command as usize, &paths, anchor);
     }
 }
 
@@ -888,6 +964,10 @@ fn open_header_menu(group_index: usize) {
         });
         AppendMenuW(menu, MF_STRING, 10, rename.as_ptr());
         AppendMenuW(menu, MF_STRING, 11, toggle.as_ptr());
+        let open_folder = wide(crate::i18n::t("在资源管理器中打开", "Open in Explorer"));
+        if portal_sort.is_some() {
+            AppendMenuW(menu, MF_STRING, 13, open_folder.as_ptr());
+        }
         // 入口分组多一份排序方式，当前项打勾。
         if let Some(current) = portal_sort {
             AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
@@ -948,6 +1028,20 @@ fn open_header_menu(group_index: usize) {
             10 => rename_group(group_index),
             11 => toggle_group(group_index),
             12 => delete_group(group_index),
+            13 => {
+                let dir = state()
+                    .groups
+                    .get(group_index)
+                    .and_then(|group| group.portal)
+                    .and_then(|index| state().portals.get(index))
+                    .map(|portal| portal.dir.clone());
+                if let Some(dir) = dir {
+                    hide_panel();
+                    if let Err(error) = crate::file_actions::reveal(&dir) {
+                        log::error(&format!("打开入口目录失败：{error}"));
+                    }
+                }
+            }
             20 => crate::app::set_portal_sort(group_index, crate::portals::SortMode::FolderFirst),
             21 => crate::app::set_portal_sort(group_index, crate::portals::SortMode::Name),
             22 => crate::app::set_portal_sort(group_index, crate::portals::SortMode::Time),
@@ -972,6 +1066,7 @@ fn rename_group(index: usize) {
     if name.is_empty() || name == current {
         return;
     }
+    crate::app::remember_undo("group");
     let app = state();
     let Some(group) = app.groups.get_mut(index) else {
         return;
@@ -997,6 +1092,7 @@ fn delete_group(index: usize) {
     if group.name == crate::groups::DEFAULT_GROUP {
         return;
     }
+    crate::app::remember_undo("group");
     let name = group.name.clone();
     if let Some(portal_index) = group.portal {
         // 只读入口：只摘掉入口本身，不碰目录里的文件。
@@ -1015,57 +1111,134 @@ fn delete_group(index: usize) {
     relayout();
 }
 
-fn apply_group_command(command: usize, path: &std::path::Path, item_index: usize) {
-    if command == 0 {
+fn indices_for_paths(app: &crate::state::App, paths: &[std::path::PathBuf]) -> Vec<usize> {
+    app.items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| paths.iter().any(|path| icons::same_path(path, &item.path)))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+fn apply_group_command(
+    command: usize,
+    paths: &[std::path::PathBuf],
+    anchor: usize,
+) {
+    if command == 0 || paths.is_empty() {
         return;
     }
     let app = state();
-    if command == 1 {
-        if let Some(name) = crate::text_input::ask(crate::i18n::t("新建分组", "New group"), "")
-            && let Some(index) = crate::groups::create(&mut app.groups, &name)
-        {
-            crate::groups::assign(&mut app.groups, path, Some(index));
-            crate::groups::save(&app.groups);
-            log::info(&format!("新建分组「{name}」并移入 {}", path.display()));
-            relayout();
+    match command {
+        1 => {
+            if let Some(name) = crate::text_input::ask(crate::i18n::t("新建分组", "New group"), "")
+            {
+                crate::app::remember_undo("group");
+                let Some(index) = crate::groups::create(&mut app.groups, &name) else {
+                    return;
+                };
+                for path in paths {
+                    crate::groups::assign(&mut app.groups, path, Some(index));
+                }
+                crate::groups::save(&app.groups);
+                log::info(&format!("新建分组「{name}」并移入 {} 项", paths.len()));
+                crate::app::persist_layout();
+                relayout();
+            }
         }
-        return;
-    }
-    if command == 2 {
-        let current = app
-            .items
-            .get(item_index)
-            .map(|item| item.name.clone())
-            .unwrap_or_default();
-        if let Some(name) = crate::text_input::ask(crate::i18n::t("重命名图标", "Rename item"), &current) {
-            crate::app::rename_item(item_index, &name);
+        2 => {
+            let current = app
+                .items
+                .get(anchor)
+                .map(|item| item.name.clone())
+                .unwrap_or_default();
+            if let Some(name) =
+                crate::text_input::ask(crate::i18n::t("重命名图标", "Rename item"), &current)
+            {
+                crate::app::rename_item(anchor, &name);
+            }
         }
-        return;
-    }
-    if command == 3 {
-        let host = app.host;
-        if let Some(icon) = crate::picker::pick_icon_file(host)
-            && !crate::app::set_item_icon(item_index, &icon)
-        {
-            log::warn("图标文件无法使用（只支持 .ico）");
+        3 => {
+            let host = app.host;
+            if let Some(icon) = crate::picker::pick_icon_file(host)
+                && !crate::app::set_item_icon(anchor, &icon)
+            {
+                log::warn("图标文件无法使用（只支持 .ico）");
+            }
         }
-        return;
-    }
-    if command == 4 {
-        crate::app::clear_item_icon(item_index);
-        return;
-    }
-    if command >= 200 {
-        let target = command - 200;
-        crate::groups::assign(&mut app.groups, path, Some(target));
-        crate::groups::save(&app.groups);
-        let name = app
-            .groups
-            .get(target)
-            .map(|group| group.name.clone())
-            .unwrap_or_default();
-        log::info(&format!("移到分组「{name}」：{}", path.display()));
-        relayout();
+        4 => crate::app::clear_item_icon(anchor),
+        30 => {
+            let path = paths[0].clone();
+            // 资源管理器需要到前台，先把全屏置顶面板收起来。
+            hide_panel();
+            if let Err(error) = crate::file_actions::reveal(&path) {
+                log::error(&format!("打开所在位置失败：{error}"));
+            }
+        }
+        31 => {
+            let path = paths[0].clone();
+            let hwnd = app.overlay;
+            // 属性对话框否则会被置顶面板盖住。
+            hide_panel();
+            if let Err(error) = crate::file_actions::properties(hwnd, &path) {
+                log::error(&format!("打开属性失败：{error}"));
+            }
+        }
+        32 => {
+            let text = paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\r\n");
+            let hwnd = app.overlay;
+            match crate::file_actions::copy_text(hwnd, &text) {
+                Ok(()) => {
+                    log::info(&format!("已复制 {} 条路径", paths.len()));
+                    let notice = if crate::i18n::is_en() {
+                        if paths.len() > 1 {
+                            format!("Copied {} paths", paths.len())
+                        } else {
+                            "Copied path".to_string()
+                        }
+                    } else if paths.len() > 1 {
+                        format!("已复制 {} 条路径", paths.len())
+                    } else {
+                        "已复制路径".to_string()
+                    };
+                    show_drop_notice(notice);
+                }
+                Err(error) => log::error(&format!("复制路径失败：{error}")),
+            }
+        }
+        33 => {
+            let indices = indices_for_paths(app, paths);
+            crate::app::remove_items(&indices);
+        }
+        other if other >= 200 => {
+            let target = other - 200;
+            let indices = indices_for_paths(app, paths);
+            let moved = crate::app::move_items_to_group(&indices, target);
+            if moved > 0 {
+                let name = app
+                    .groups
+                    .get(target)
+                    .map(|group| crate::groups::display_name(&group.name))
+                    .unwrap_or_default();
+                let notice = if crate::i18n::is_en() {
+                    if moved > 1 {
+                        format!("Moved {moved} into \"{name}\"")
+                    } else {
+                        format!("Moved into \"{name}\"")
+                    }
+                } else if moved > 1 {
+                    format!("已移入「{name}」{moved} 项")
+                } else {
+                    format!("已移入「{name}」")
+                };
+                show_drop_notice(notice);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1991,6 +2164,13 @@ fn draw_items(hdc: HDC, app: &crate::state::App, paint: &RECT) {
                 continue;
             }
             let item = &app.items[index];
+            // 多选整体拖动时，所有被选中的图标都让位给跟随图标。
+            if app.drag.is_some_and(|drag| drag.active)
+                && app.selection.len() > 1
+                && app.selection.contains(&index)
+            {
+                continue;
+            }
             if app.drag_hidden == Some(index) || !visible(app, index) {
                 // 拖动中的图标由跟随图层绘制；搜索时未命中的先留空。
                 continue;
@@ -2808,6 +2988,8 @@ fn apply_search(app: &mut crate::state::App) {
     app.layout = layout;
     app.scroll = 0;
     app.selected = results.first().copied();
+    app.selection.clear();
+    app.selection_anchor = None;
     if let Some(index) = app.selected {
         ensure_selected_visible(app, index);
     }
@@ -2911,6 +3093,22 @@ fn draw_hint(hdc: HDC, app: &crate::state::App, paint: &RECT) {
             .to_string(),
             theme.chip_hot,
             theme.warn_text,
+        )
+    } else if app.selection.len() > 1 {
+        (
+            if crate::i18n::is_en() {
+                format!(
+                    "{} selected　·　Ctrl+click toggles　·　Shift selects a range　·　drag to move　·　Delete to remove　·　Esc to clear",
+                    app.selection.len()
+                )
+            } else {
+                format!(
+                    "已选 {} 项　·　Ctrl 点选增减　·　Shift 连选　·　拖动整组移入　·　Delete 移除　·　Esc 取消",
+                    app.selection.len()
+                )
+            },
+            theme.chip_hot,
+            theme.text,
         )
     } else if !app.search.is_empty() {
         (
@@ -3242,6 +3440,15 @@ pub fn handle_escape() {
         unsafe { InvalidateRect(app.overlay, std::ptr::null(), 0) };
         return;
     }
+    if !app.selection.is_empty() {
+        app.selection.clear();
+        app.selection_anchor = None;
+        app.static_dirty = true;
+        log::info("Esc：取消多选");
+        // SAFETY: 句柄有效。
+        unsafe { InvalidateRect(app.overlay, std::ptr::null(), 0) };
+        return;
+    }
     hide_panel();
 }
 
@@ -3276,6 +3483,9 @@ pub fn move_selection(dx: i32, dy: i32) {
         return;
     }
     app.selected = Some(next);
+    app.selection.clear();
+    app.selection.push(next);
+    app.selection_anchor = Some(next);
     ensure_selected_visible(app, next);
     // SAFETY: 句柄有效；选中框是每帧画的，整屏重画一帧最省事。
     unsafe {
@@ -3366,16 +3576,116 @@ fn ensure_selected_visible(app: &mut crate::state::App, index: usize) {
     }
 }
 
+/// 当前可见项按屏幕顺序排列（搜索态只剩命中的格子，也适用）。
+fn ordered_visible_items(app: &crate::state::App) -> Vec<usize> {
+    let mut entries: Vec<(i32, i32, usize)> = app
+        .layout
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(index, tile)| {
+            *index < app.items.len()
+                && tile.right > tile.left
+                && tile.bottom > tile.top
+                && visible(app, *index)
+        })
+        .map(|(index, tile)| (tile.top, tile.left, index))
+        .collect();
+    entries.sort_unstable();
+    entries.into_iter().map(|(_, _, index)| index).collect()
+}
+
+/// Ctrl 点选追加/取消，Shift 连选；普通点击由调用方处理。
+fn click_select(index: usize, ctrl: bool, shift: bool) {
+    let app = state();
+    if index >= app.items.len() {
+        return;
+    }
+    if shift {
+        let ordered = ordered_visible_items(app);
+        let anchor = app
+            .selection_anchor
+            .filter(|anchor| ordered.contains(anchor))
+            .unwrap_or(index);
+        let from = ordered.iter().position(|item| *item == anchor);
+        let to = ordered.iter().position(|item| *item == index);
+        if let (Some(from), Some(to)) = (from, to) {
+            let (low, high) = if from <= to { (from, to) } else { (to, from) };
+            if !ctrl {
+                app.selection.clear();
+            }
+            for item in &ordered[low..=high] {
+                if !app.selection.contains(item) {
+                    app.selection.push(*item);
+                }
+            }
+            app.selection_anchor = Some(anchor);
+        }
+    } else if ctrl {
+        if let Some(position) = app.selection.iter().position(|item| *item == index) {
+            app.selection.remove(position);
+        } else {
+            app.selection.push(index);
+        }
+        app.selection_anchor = Some(index);
+    } else {
+        app.selection.clear();
+        app.selection.push(index);
+        app.selection_anchor = Some(index);
+    }
+    app.selected = if app.selection.is_empty() {
+        None
+    } else {
+        Some(index)
+    };
+    app.static_dirty = true;
+    log::info(&format!("多选：{} 项", app.selection.len()));
+    // SAFETY: 句柄有效；选中框在静态帧之后画，整屏重画一帧。
+    unsafe {
+        InvalidateRect(app.overlay, std::ptr::null(), 0);
+        UpdateWindow(app.overlay);
+    }
+}
+
+/// Ctrl+Z：撤销最近一步。
+pub fn undo_last() {
+    crate::app::undo();
+}
+
+/// Delete：移除多选（或键盘选中）的项；返回是否处理了按键。
+pub fn remove_selection() -> bool {
+    let app = state();
+    if app.search_typing || !app.search.is_empty() {
+        return false;
+    }
+    let mut indices = app.selection.clone();
+    if indices.is_empty()
+        && let Some(selected) = app.selected
+    {
+        indices.push(selected);
+    }
+    indices.retain(|index| {
+        *index < app.items.len() && app.items[*index].source != icons::ItemSource::Portal
+    });
+    if indices.is_empty() {
+        return false;
+    }
+    crate::app::remove_items(&indices);
+    true
+}
+
 /// 键盘选中框：主题强调色描两圈，裁剪到内容区。
 fn draw_selection(hdc: HDC, app: &crate::state::App) {
-    let Some(index) = app.selected else {
+    let mut indices = app.selection.clone();
+    if let Some(selected) = app.selected
+        && !indices.contains(&selected)
+    {
+        indices.push(selected);
+    }
+    if indices.is_empty() {
         return;
-    };
-    let Some(tile) = app.layout.tiles.get(index).copied() else {
-        return;
-    };
+    }
     let scale = app.layout.scale;
-    let rect = view_rect(app, tile);
     // SAFETY: DC 有效；SaveDC/RestoreDC 成对恢复裁剪区。
     unsafe {
         let saved = SaveDC(hdc);
@@ -3386,14 +3696,23 @@ fn draw_selection(hdc: HDC, app: &crate::state::App) {
             app.layout.width,
             app.layout.height - (56.0 * scale) as i32,
         );
-        draw_outline(hdc, rect, scale, app.theme.accent);
-        let inner = RECT {
-            left: rect.left + 2,
-            top: rect.top + 2,
-            right: rect.right - 2,
-            bottom: rect.bottom - 2,
-        };
-        draw_outline(hdc, inner, scale, app.theme.accent);
+        for index in indices {
+            let Some(tile) = app.layout.tiles.get(index).copied() else {
+                continue;
+            };
+            if tile.right <= tile.left || tile.bottom <= tile.top {
+                continue;
+            }
+            let rect = view_rect(app, tile);
+            draw_outline(hdc, rect, scale, app.theme.accent);
+            let inner = RECT {
+                left: rect.left + 2,
+                top: rect.top + 2,
+                right: rect.right - 2,
+                bottom: rect.bottom - 2,
+            };
+            draw_outline(hdc, inner, scale, app.theme.accent);
+        }
         RestoreDC(hdc, saved);
     }
 }
@@ -3743,38 +4062,34 @@ unsafe extern "system" fn overlay_proc(
                     // 自动滚动时指针没动、指针下的组也会变。
                     let group = drag_drop_group(app, drag.from, x, y);
                     if let Some(group) = group {
-                        let path = app
-                            .items
-                            .get(drag.from)
-                            .map(|item| item.path.clone())
-                            .unwrap_or_default();
-                        let collapsed = app
-                            .groups
-                            .get(group)
-                            .is_some_and(|entry| entry.collapsed);
-                        crate::groups::assign(&mut app.groups, &path, Some(group));
-                        crate::groups::save(&app.groups);
                         let name = app
                             .groups
                             .get(group)
-                            .map(|group| group.name.clone())
+                            .map(|group| crate::groups::display_name(&group.name))
                             .unwrap_or_default();
-                        if collapsed {
-                            if let Some(entry) = app.groups.get_mut(group) {
-                                entry.collapsed = false;
-                            }
-                            crate::groups::save(&app.groups);
-                            log::info(&format!("目标组「{name}」已折叠，自动展开"));
-                        }
-                        log::info(&format!("拖入分组「{name}」：{}", path.display()));
-                        crate::app::persist_layout();
-                        relayout();
-                        let notice = if crate::i18n::is_en() {
-                            format!("Moved into \"{name}\"")
+                        // 多选时整组移入；只拖一个时与原行为一致。
+                        let indices = if app.selection.len() > 1
+                            && app.selection.contains(&drag.from)
+                        {
+                            app.selection.clone()
                         } else {
-                            format!("已移入「{name}」")
+                            vec![drag.from]
                         };
-                        show_drop_notice(notice);
+                        let moved = crate::app::move_items_to_group(&indices, group);
+                        if moved > 0 {
+                            let notice = if crate::i18n::is_en() {
+                                if moved > 1 {
+                                    format!("Moved {moved} into \"{name}\"")
+                                } else {
+                                    format!("Moved into \"{name}\"")
+                                }
+                            } else if moved > 1 {
+                                format!("已移入「{name}」{moved} 项")
+                            } else {
+                                format!("已移入「{name}」")
+                            };
+                            show_drop_notice(notice);
+                        }
                     } else if let Some(group) = group_under_cursor(app, x, y)
                         && app
                             .groups
@@ -3794,7 +4109,8 @@ unsafe extern "system" fn overlay_proc(
                             )
                             .to_string(),
                         );
-                    } else if let Some(target) = target
+                    } else if app.selection.len() <= 1
+                        && let Some(target) = target
                         && target != drag.from
                         && app.search.is_empty()
                         && target < app.items.len()
@@ -3875,19 +4191,23 @@ unsafe extern "system" fn overlay_proc(
                 };
                 if in_settings {
                     log::info("点击左上角「设置」");
+                    crate::app::clear_selection();
                     open_settings();
                     return 0;
                 }
                 if in_new_group {
+                    crate::app::clear_selection();
                     create_group();
                     return 0;
                 }
                 if in_search {
                     log::info("点击搜索按钮");
+                    crate::app::clear_selection();
                     toggle_search();
                     return 0;
                 }
                 if in_chip {
+                    crate::app::clear_selection();
                     let app = state();
                     app.remove_mode = !app.remove_mode;
                     app.static_dirty = true;
@@ -3906,6 +4226,7 @@ unsafe extern "system" fn overlay_proc(
                 }
                 // 整条分组标题都能点：按下先记录，松开没拖动就折叠/展开，拖过就是调顺序。
                 if let Some(group) = header_at(x, y) {
+                    crate::app::clear_selection();
                     let app = state();
                     app.pending_remove = None;
                     app.header_drag = Some(crate::state::HeaderDragState {
@@ -3923,7 +4244,15 @@ unsafe extern "system" fn overlay_proc(
                         && index < state().items.len()
                         && visible(state(), index)
                     {
-                        crate::app::remove_item(index);
+                        let app = state();
+                        let indices = if app.selection.len() > 1
+                            && app.selection.contains(&index)
+                        {
+                            app.selection.clone()
+                        } else {
+                            vec![index]
+                        };
+                        crate::app::remove_items(&indices);
                     }
                     return 0;
                 }
@@ -3936,8 +4265,29 @@ unsafe extern "system" fn overlay_proc(
                         // 搜索过滤掉的项不可操作。
                     }
                     Some(index) => {
+                        // Ctrl/Shift 点选只改多选，不启动拖动。
+                        // SAFETY: 只读取按键状态。
+                        let (ctrl, shift) = unsafe {
+                            (
+                                GetKeyState(i32::from(VK_CONTROL)) < 0,
+                                GetKeyState(i32::from(VK_SHIFT)) < 0,
+                            )
+                        };
+                        if ctrl || shift {
+                            click_select(index, ctrl, shift);
+                            return 0;
+                        }
                         // 按下先记录，松开时若没拖动就是“打开”，拖动则是排序。
                         let app = state();
+                        // 点在已有多选里的某一项时保留整组，方便整体拖动；
+                        // 点在外面则改成只选这一项。
+                        if !app.selection.contains(&index) {
+                            app.selection.clear();
+                            app.selection.push(index);
+                            app.selection_anchor = Some(index);
+                        }
+                        app.selected = Some(index);
+                        app.static_dirty = true;
                         app.drag = Some(crate::state::DragState {
                             from: index,
                             start: (x, y),
@@ -3968,6 +4318,7 @@ unsafe extern "system" fn overlay_proc(
                 if let Some((group, rect)) = sticky_header(state()) {
                     // SAFETY: 矩形来自本模块布局。
                     if unsafe { PtInRect(&rect, point) != 0 } {
+                        crate::app::clear_selection();
                         open_header_menu(group);
                         return 0;
                     }
@@ -3982,6 +4333,7 @@ unsafe extern "system" fn overlay_proc(
                         .map(|header| header.group)
                 };
                 if let Some(group) = hovered_header {
+                    crate::app::clear_selection();
                     open_header_menu(group);
                     return 0;
                 }
@@ -3990,14 +4342,35 @@ unsafe extern "system" fn overlay_proc(
                         && index < state().items.len()
                         && visible(state(), index)
                     {
-                        crate::app::remove_item(index);
+                        let app = state();
+                        let indices = if app.selection.len() > 1
+                            && app.selection.contains(&index)
+                        {
+                            app.selection.clone()
+                        } else {
+                            vec![index]
+                        };
+                        crate::app::remove_items(&indices);
                     }
                 } else if let Some(index) = hit_test(x, y)
                     && index < state().items.len()
                     && visible(state(), index)
                 {
+                    let app = state();
+                    let in_multi =
+                        app.selection.len() > 1 && app.selection.contains(&index);
+                    let indices = if in_multi {
+                        app.selection.clone()
+                    } else {
+                        app.selection.clear();
+                        app.selection.push(index);
+                        app.selection_anchor = Some(index);
+                        app.selected = Some(index);
+                        app.static_dirty = true;
+                        vec![index]
+                    };
                     log::info(&format!("右键图标 #{index}：选择分组"));
-                    open_group_menu(index);
+                    open_group_menu(&indices);
                 }
             }
             0

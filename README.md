@@ -4,7 +4,7 @@
   <p><strong>把桌面图标收进一块随叫随到的磨砂面板。</strong></p>
   <p>Windows 11 · Rust + Win32 · 常驻托盘 · 只整理，不动文件</p>
   <p>
-    <img alt="version" src="https://img.shields.io/badge/version-0.3.4-4C7DFF?style=flat-square">
+    <img alt="version" src="https://img.shields.io/badge/version-0.3.5-4C7DFF?style=flat-square">
     <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2011-0F172A?style=flat-square">
     <img alt="rust" src="https://img.shields.io/badge/Rust%20%2B%20Win32-native-EF6C00?style=flat-square">
     <img alt="license" src="https://img.shields.io/badge/license-MIT-22C55E?style=flat-square">
@@ -28,7 +28,7 @@ LiteFences 启动后没有主窗口，也没有任务栏按钮，只在托盘里
 
 | | | |
 |:--|:--|:--|
-| **⚡ 唤出即用**<br>热键、托盘或双击桌面空白处唤出；`Esc` 或单击空白收起。 | **🔍 直接打字搜索**<br>`bdwp` → 百度网盘，`vsc` → Visual Studio Code。拼音首字母、英文缩写、名称子串都能命中。 | **🗂️ 自动分组**<br>图标按分组铺开，可折叠、改名、拖标题调顺序，也能把图标拖到别的组。 |
+| **⚡ 唤出即用**<br>热键、托盘或双击桌面空白处唤出；`Esc` 或单击空白收起，误操作可按 `Ctrl+Z` 撤销。 | **🔍 全拼 / 首字母搜索**<br>`bdwp` → 百度网盘，`chongqing` 或 `cq` → 重庆；英文缩写、名称子串也能命中。 | **🗂️ 多选整理**<br>图标按分组铺开；`Ctrl` 点选、`Shift` 连选，拖动整组移入，`Delete` 批量移除。 |
 | **📥 拖入即归档**<br>从资源管理器拖文件、文件夹、快捷方式进来，只加引用，永不移动源文件。 | **🪶 原生轻量**<br>Rust + Win32，没有 Electron / WebView；开发机实测常驻私有内存约 8 MB，空闲 CPU ≈ 0。 | **🎨 五套主题 · 双语**<br>深空蓝、石墨灰、午夜紫、森林绿、暖砂；简体中文 / English 随时切换。 |
 
 ## 界面
@@ -72,9 +72,16 @@ LiteFences 启动后没有主窗口，也没有任务栏按钮，只在托盘里
 | `↑` `↓` `←` `→` | 在图标或搜索结果之间移动 |
 | `Enter` | 打开选中项 |
 | `Tab` / `Shift+Tab` | 跳到下一个 / 上一个分组 |
-| `Esc` | 清除搜索；再按一次收起面板 |
+| `Ctrl` 点选 / `Shift` 连选 | 多选图标 |
+| `Delete` | 从面板移除所选图标（不删源文件） |
+| `Ctrl+Z` | 撤销最近一次移动、移除、重命名、换图标或分组改动 |
+| `Esc` | 取消多选 / 清除搜索；再按一次收起面板 |
 
-搜索只接收 ASCII 字母和数字（拼音首字母），不支持在面板里直接用中文输入法打字。
+搜索接收 ASCII 字母和数字：支持中文全拼（含多音字）与拼音首字母。面板不抢焦点，
+不支持直接用中文输入法打字。
+
+图标右键菜单提供「打开所在位置」「属性」「复制路径」，多选时可一次复制多条路径。
+托盘菜单「检查更新…」手动检查 GitHub Releases，也可关闭启动时的自动检查。
 
 ## 构建
 
@@ -121,7 +128,7 @@ dotnet tool install --global wix --version 5.*
 - 只在 Win11 + 单屏开发机上实测过；Win10、多屏 / 混合 DPI 还没有实机验证。
 - 受限权限（低完整性级别）下托盘创建会失败，热键仍然可用。
 - 桌面空白双击唤出依赖系统鼠标钩子，装了其它桌面整理软件时可能被抢。
-- 搜索只支持拼音首字母和 ASCII，中文输入法不能直接在面板里打字。
+- 搜索支持全拼、拼音首字母和多音字，但中文输入法不能直接在面板里打字。
 
 </details>
 

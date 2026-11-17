@@ -101,6 +101,23 @@ pub fn run() -> std::process::ExitCode {
         };
     }
 
+    // 排障：只验证更新接口可达且 JSON 能解析。
+    if options.update_test {
+        return match crate::update::check_now() {
+            Ok((tag, url)) => {
+                log::info(&format!(
+                    "更新接口正常：最新={tag} 当前={} 地址={url}",
+                    crate::update::current_version()
+                ));
+                std::process::ExitCode::SUCCESS
+            }
+            Err(error) => {
+                log::error(&format!("更新接口失败：{error}"));
+                std::process::ExitCode::FAILURE
+            }
+        };
+    }
+
     // 先看是否有实例在跑：有就静默退出，避免每次从受限环境启动都弹提示。
     if another_instance_running() {
         log::warn("已有实例在运行，本次启动退出");
@@ -163,6 +180,9 @@ pub fn run() -> std::process::ExitCode {
         layout_order: icons::load_order(),
         drag: None,
         header_drag: None,
+        selection: Vec::new(),
+        selection_anchor: None,
+        undo: None,
         drag_hidden: None,
         pending_remove: None,
         drop_hover: None,
@@ -176,6 +196,7 @@ pub fn run() -> std::process::ExitCode {
         onboarded: crate::store::load().onboarded,
         selected: None,
         search: String::new(),
+        check_updates: initial_settings.check_updates,
         search_open: false,
         search_anim: None,
         search_typing: false,
@@ -214,6 +235,8 @@ pub fn run() -> std::process::ExitCode {
         unsafe { SetTimer(host, TIMER_TRAY_RETRY, 3000, None) };
     }
     register_hotkeys(host);
+    // 后台检查更新；设置里关掉时 auto_check 会直接返回。
+    crate::update::auto_check(host);
     // 启动后立刻在后台扫描桌面图标，这样第一次唤出面板时通常已经准备好。
     begin_scan(host);
     let (mouse_hook, keyboard_hook) = hooks::install();
@@ -412,11 +435,7 @@ pub fn set_theme(key: &str) {
         return;
     }
     app.theme = theme;
-    crate::settings::save(&crate::settings::Settings {
-        hotkey: app.hotkey,
-        theme: theme.key.to_string(),
-        lang: app.lang_setting.clone(),
-    });
+    persist_settings();
     log::info(&format!("主题切换为「{}」（磨砂底色调下次唤出生效）", theme.name));
     overlay::relayout();
 }
@@ -429,11 +448,7 @@ pub fn set_language(setting: &str) {
     }
     app.lang_setting = setting.to_string();
     crate::i18n::set(crate::i18n::resolve(setting));
-    crate::settings::save(&crate::settings::Settings {
-        hotkey: app.hotkey,
-        theme: app.theme.key.to_string(),
-        lang: app.lang_setting.clone(),
-    });
+    persist_settings();
     log::info(&format!("界面语言：{}", setting));
     if state().shown {
         // 标题栏文字也要跟着换，直接重建窗口最省事。
@@ -441,6 +456,28 @@ pub fn set_language(setting: &str) {
     } else {
         overlay::relayout();
     }
+}
+
+/// 把运行态设置整份写回，避免新增字段时某个入口忘记带。
+fn persist_settings() {
+    let app = state();
+    crate::settings::save(&crate::settings::Settings {
+        hotkey: app.hotkey,
+        theme: app.theme.key.to_string(),
+        lang: app.lang_setting.clone(),
+        check_updates: app.check_updates,
+    });
+}
+
+/// 托盘菜单：开关自动检查更新。
+pub fn set_check_updates(enabled: bool) {
+    let app = state();
+    if app.check_updates == enabled {
+        return;
+    }
+    app.check_updates = enabled;
+    persist_settings();
+    log::info(&format!("自动检查更新：{}", if enabled { "开启" } else { "关闭" }));
 }
 
 /// 托盘/设置菜单：选一个目录，加为面板里的只读入口。
@@ -642,6 +679,9 @@ pub fn set_item_icon(index: usize, icon_path: &std::path::Path) -> bool {
         log::info("入口是只读视图，不能换图标");
         return false;
     }
+    if icon_path.exists() {
+        remember_undo("icon");
+    }
     if !icons::set_custom_icon(item, icon_path) {
         return false;
     }
@@ -667,6 +707,7 @@ pub fn clear_item_icon(index: usize) {
     if item.custom_icon.is_none() {
         return;
     }
+    remember_undo("icon");
     icons::clear_custom_icon(item);
     log::info(&format!("已恢复默认图标：{}", item.name));
     persist_layout();
@@ -687,6 +728,7 @@ pub fn rename_item(index: usize, name: &str) {
     if name.is_empty() || item.name == name {
         return;
     }
+    remember_undo("rename");
     let path = item.path.display().to_string();
     item.name = name.to_string();
     log::info(&format!("重命名：{path} → {name}"));
@@ -694,38 +736,213 @@ pub fn rename_item(index: usize, name: &str) {
     overlay::relayout();
 }
 
-/// 移除面板上的某一项：手动图标删记录，桌面图标进隐藏列表（都不动源文件）。
-pub fn remove_item(index: usize) {
+/// 记录改动前的面板状态，供 Ctrl+Z 单步撤销。只保留最近一步。
+pub fn remember_undo(label: &'static str) {
     let app = state();
-    let Some(item) = app.items.get(index) else {
-        return;
+    app.undo = Some(crate::state::UndoSnapshot {
+        label,
+        groups: app
+            .groups
+            .iter()
+            .filter(|group| group.portal.is_none())
+            .cloned()
+            .collect(),
+        custom: app.custom.clone(),
+        hidden: app.hidden.clone(),
+        items: app
+            .items
+            .iter()
+            .filter(|item| item.source != icons::ItemSource::Portal)
+            .map(|item| (item.path.clone(), item.name.clone(), item.custom_icon.clone()))
+            .collect(),
+        selected: app.selected,
+        selection: app.selection.clone(),
+    });
+}
+
+/// 撤销最近一步改动：重新扫描桌面，再按快照恢复分组、顺序、名字和自定义图标。
+pub fn undo() -> bool {
+    let app = state();
+    let Some(snapshot) = app.undo.take() else {
+        log::info("没有可撤销的操作");
+        return false;
     };
-    if item.source == icons::ItemSource::Portal {
-        log::info("入口是只读视图，不能用「移除」删掉文件；要移除请右键入口标题");
+    let label = snapshot.label;
+    log::info(&format!("撤销：{label}"));
+    app.groups = snapshot.groups.clone();
+    app.custom = snapshot.custom.clone();
+    app.hidden = snapshot.hidden.clone();
+    match icons::collect_items(&app.hidden) {
+        Ok(scanned) => icons::replace(&mut app.items, scanned),
+        Err(error) => {
+            log::error(&format!("撤销时重扫桌面失败：{error}"));
+            icons::refresh(&mut app.items);
+        }
+    }
+    app.desktop_count = app.items.len();
+    append_custom_items();
+    icons::apply_order_entries(&mut app.items, &snapshot.items);
+    crate::groups::save(&app.groups);
+    icons::save_custom(&app.custom);
+    icons::save_hidden(&app.hidden);
+    persist_layout();
+    rebuild_portal_items();
+    app.selected = snapshot
+        .selected
+        .filter(|index| *index < app.items.len());
+    app.selection = snapshot
+        .selection
+        .into_iter()
+        .filter(|index| *index < app.items.len())
+        .collect();
+    app.selection_anchor = app.selection.last().copied();
+    overlay::relayout();
+    if app.shown {
+        let text = match label {
+            "remove" => crate::i18n::t("已撤销移除", "Undid remove"),
+            "move" => crate::i18n::t("已撤销移动", "Undid move"),
+            "rename" => crate::i18n::t("已撤销重命名", "Undid rename"),
+            "group" => crate::i18n::t("已撤销分组改动", "Undid group change"),
+            "icon" => crate::i18n::t("已撤销图标改动", "Undid icon change"),
+            _ => crate::i18n::t("已撤销", "Undone"),
+        };
+        overlay::show_drop_notice(text.to_string());
+    }
+    true
+}
+
+/// 清空鼠标多选。
+pub fn clear_selection() {
+    let app = state();
+    if app.selection.is_empty() && app.selection_anchor.is_none() {
         return;
     }
-    let path = item.path.clone();
-    let source = item.source;
-    match source {
-        icons::ItemSource::Custom => {
-            app.custom.retain(|known| !icons::same_path(known, &path));
-            icons::save_custom(&app.custom);
-        }
-        icons::ItemSource::Desktop => {
-            if !app.hidden.iter().any(|known| icons::same_path(known, &path)) {
-                app.hidden.push(path.clone());
-                icons::save_hidden(&app.hidden);
-            }
-        }
-        icons::ItemSource::Portal => return,
+    app.selection.clear();
+    app.selection_anchor = None;
+    app.static_dirty = true;
+}
+
+/// 把多个图标移到 `target` 分组。返回实际移动的数量。
+pub fn move_items_to_group(indices: &[usize], target: usize) -> usize {
+    let app = state();
+    if app
+        .groups
+        .get(target)
+        .is_none_or(|group| group.portal.is_some())
+    {
+        return 0;
     }
-    let removed = app.items.remove(index);
-    // 分组里对应的记录也一并清掉。
-    crate::groups::forget(&mut app.groups, &path);
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    for &index in indices {
+        let Some(item) = app.items.get(index) else {
+            continue;
+        };
+        if item.source == icons::ItemSource::Portal {
+            continue;
+        }
+        if crate::groups::group_of(&app.groups, &item.path) == Some(target) {
+            continue;
+        }
+        if paths.iter().any(|known| icons::same_path(known, &item.path)) {
+            continue;
+        }
+        paths.push(item.path.clone());
+    }
+    if paths.is_empty() {
+        return 0;
+    }
+    remember_undo("move");
+    for path in &paths {
+        crate::groups::assign(&mut app.groups, path, Some(target));
+    }
+    if let Some(group) = app.groups.get_mut(target)
+        && group.collapsed
+    {
+        group.collapsed = false;
+        log::info("目标组已折叠，自动展开");
+    }
+    let name = app
+        .groups
+        .get(target)
+        .map(|group| crate::groups::display_name(&group.name))
+        .unwrap_or_default();
     crate::groups::save(&app.groups);
-    icons::destroy_item(removed);
-    log::info(&format!("从面板移除：{}", path.display()));
+    for path in &paths {
+        log::info(&format!("移入分组「{name}」：{}", path.display()));
+    }
     persist_layout();
+    app.selection.clear();
+    app.selection_anchor = None;
+    app.selected = None;
+    overlay::relayout();
+    paths.len()
+}
+
+/// 从面板移除多个项：手动图标删记录，桌面图标进隐藏列表（都不动源文件）。
+pub fn remove_items(indices: &[usize]) {
+    let app = state();
+    let mut targets: Vec<usize> = indices
+        .iter()
+        .copied()
+        .filter(|index| *index < app.items.len())
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+    let mut skipped_portal = false;
+    targets.retain(|index| {
+        if app.items[*index].source == icons::ItemSource::Portal {
+            skipped_portal = true;
+            false
+        } else {
+            true
+        }
+    });
+    if targets.is_empty() {
+        if skipped_portal {
+            log::info("入口是只读视图，不能用「移除」删掉文件；要移除请右键入口标题");
+        }
+        return;
+    }
+    remember_undo("remove");
+    let mut removed = Vec::new();
+    let mut paths = Vec::new();
+    for index in targets.iter().rev() {
+        let item = app.items.remove(*index);
+        paths.push(item.path.clone());
+        removed.push(item);
+    }
+    for item in &removed {
+        match item.source {
+            icons::ItemSource::Custom => {
+                app.custom
+                    .retain(|known| !icons::same_path(known, &item.path));
+            }
+            icons::ItemSource::Desktop => {
+                if !app
+                    .hidden
+                    .iter()
+                    .any(|known| icons::same_path(known, &item.path))
+                {
+                    app.hidden.push(item.path.clone());
+                }
+            }
+            icons::ItemSource::Portal => {}
+        }
+    }
+    icons::save_custom(&app.custom);
+    icons::save_hidden(&app.hidden);
+    for path in &paths {
+        crate::groups::forget(&mut app.groups, path);
+    }
+    crate::groups::save(&app.groups);
+    for item in removed {
+        icons::destroy_item(item);
+    }
+    log::info(&format!("从面板移除 {} 项", paths.len()));
+    persist_layout();
+    app.selection.clear();
+    app.selection_anchor = None;
+    app.selected = None;
     overlay::relayout();
 }
 
@@ -799,8 +1016,12 @@ pub fn move_item(from: usize, to: usize) {
         log::info("入口是只读视图，不能拖动排序");
         return;
     }
+    remember_undo("move");
     let item = app.items.remove(from);
     app.items.insert(to, item);
+    app.selection.clear();
+    app.selection_anchor = None;
+    app.selected = None;
     log::info(&format!("调整顺序：{from} → {to}"));
     persist_layout();
     overlay::relayout();
@@ -1020,6 +1241,7 @@ fn change_hotkey() {
             hotkey: chosen,
             theme: app.theme.key.to_string(),
             lang: app.lang_setting.clone(),
+            check_updates: app.check_updates,
         });
     }
     log::info(&format!("唤出热键已改为 {}", chosen.describe()));
@@ -1106,6 +1328,7 @@ unsafe extern "system" fn host_proc(
             match event {
                 WM_LBUTTONUP => overlay::show_panel(),
                 WM_RBUTTONUP => handle_menu(hwnd),
+                tray::NIN_BALLOONUSERCLICK => crate::update::open_latest(),
                 _ => {}
             }
             0
@@ -1164,6 +1387,10 @@ unsafe extern "system" fn host_proc(
                     first.as_deref().unwrap_or("（无）")
                 ));
             }
+            0
+        }
+        crate::update::WM_APP_UPDATE => {
+            crate::update::handle_result(hwnd);
             0
         }
         WM_TIMER if wparam == TIMER_REHIDE => {
@@ -1255,7 +1482,15 @@ fn handle_menu(host: HWND) {
     let hotkey_text = state().hotkey.describe();
     let theme_key = state().theme.key;
     let lang_setting = state().lang_setting.clone();
-    let command = tray::show_menu(host, autostart_on, &hotkey_text, theme_key, &lang_setting);
+    let check_updates = state().check_updates;
+    let command = tray::show_menu(
+        host,
+        autostart_on,
+        &hotkey_text,
+        theme_key,
+        &lang_setting,
+        check_updates,
+    );
     handle_command(command);
 }
 
@@ -1266,6 +1501,11 @@ fn handle_command(command: usize) {
         tray::MENU_AUTOSTART => toggle_autostart(),
         tray::MENU_HOTKEY => change_hotkey(),
         tray::MENU_ADD_PORTAL => add_portal_from_picker(),
+        tray::MENU_CHECK_UPDATE => crate::update::check(state().host, true),
+        tray::MENU_AUTO_UPDATE => {
+            let enabled = !state().check_updates;
+            set_check_updates(enabled);
+        }
         tray::MENU_EXIT => request_exit(state().host),
         other if other >= tray::MENU_LANG_BASE => {
             let index = other - tray::MENU_LANG_BASE;

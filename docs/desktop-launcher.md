@@ -24,6 +24,8 @@
 | `--show-ms=3000` | 启动即显示面板 N 毫秒后自动退出（演示/排障） |
 | `--self-test` | 不显示界面，检查虚化、图标枚举、布局、分组与拖放注册，结果写入数据目录并返回退出码 |
 | `--drop-test=<路径[;路径…]>` | 排障：把给定路径当成一次外部拖入投给面板，验证拖放链路后退出；结果写 `drop-test.txt`，悬停画面写 `drop-hover.bmp` |
+| `--select=N[,N…]` | 启动时选中一个或多个图标（验证多选高亮，配合 `--capture` 截图） |
+| `--update-test` | 同步请求一次 GitHub Releases，把结果写进日志后退出（检查更新排障） |
 
 ## 数据与日志
 
@@ -664,3 +666,62 @@ INFO 桌面目录：C:\Users\16\Desktop | C:\Users\Public\Desktop
 结果多少不影响列数（否则删字后列数会卡住）。
 
 限制：只接收 ASCII 字母/数字，中文输入法不能直接打字；带 Ctrl/Alt/Win 的组合键不拦截。
+
+## 0.3.5：多选、撤销、右键文件操作、全拼与检查更新
+
+### 多选
+
+普通点击仍是单选；`Ctrl` 点选增减，`Shift` 按当前可见顺序连选。多选后：
+
+- 拖动任意一个已选项，整组一起移动；落点是目标分组时调用 `move_items_to_group`，
+  源图标在拖动期间全部从静态帧隐藏；
+- `Delete` 调用 `remove_items`，只移除面板引用，不动源文件；
+- 右键菜单显示「已选 N 项」，并提供打开所在位置、属性、复制 N 条路径、批量移组和批量移除；
+- `Esc` 先取消多选，再按一次才清搜索或收起面板。底部提示条会显示当前选中数量。
+
+多选状态在 `App.selection: Vec<usize>`，锚点在 `selection_anchor`。方向键移动时会同步成单选，
+避免键盘选中框和鼠标多选各画一套。
+
+### 单步撤销
+
+`Ctrl+Z` 撤销最近一次改动，快照在 `App.undo`，只保留一步。覆盖范围：拖动排序 / 移组、
+批量移除、重命名、换图标、恢复默认图标，以及分组的新建、改名、删除、排序和「新建分组并移入」。
+
+实现上先存 `groups`、`custom`、`hidden`、桌面项顺序（路径 + 显示名 + 自定义图标）和当前选择；
+撤销时重新扫描桌面，再按快照恢复。代价是 UI 线程要重扫一次（本机 81 项约数秒），
+换来的是不用维护一套增量操作日志。
+
+### 右键文件操作
+
+`file_actions.rs` 通过 `SHOpenFolderAndSelectItems` 打开所在位置，`ShellExecuteExW` 的
+`properties` 动词打开属性，剪贴板用 `CF_UNICODETEXT` 写入路径。多选复制按行拼接，顺序与面板一致。
+属性对话框会被置顶面板挡住，所以打开前先收起面板。
+
+### 全拼与多音字
+
+`search.rs` 内置 `pinyin_data.txt`（6,758 字，来自 Windows 自带的单字拼音表），每个字保留多个读音。
+搜索时按字符位置做笛卡尔组合，上限 24 种，避免长名字里多个多音字把组合数放大：
+
+- `重庆` → `zhongqing` / `chongqing`，首字母 `zq` / `cq`；
+- `长江` → `changjiang` / `zhangjiang`；
+- `银行` → `yinhang` / `yinxing`。
+
+全拼精确匹配 745 分、前缀 730 分、子串 680 分，仍排在普通名称子串之前。表里没有的生僻字
+退回原来的 GB2312 声母边界表，只保证首字母。
+
+### 检查更新
+
+`update.rs` 后台线程请求 `api.github.com/repos/Ltsunahi/LiteFences/releases/latest`，
+比较前三段版本号；发现新版本用托盘气泡提示，点击气泡打开下载页。结果通过 `WM_APP_UPDATE`
+投递回 UI 线程。启动时自动检查可以在托盘菜单关闭，状态存 `config.json` 的 `settings.check_updates`。
+
+两个实际环境问题：
+
+1. WinHTTP 的 `WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY` 只做 WPAD 自动发现，不会使用 WinINET 的静态代理。
+   现在先读 `HKCU\...\Internet Settings` 的 `ProxyEnable` / `ProxyServer`，用命名代理请求；
+   失败后再退回自动代理。
+2. GitHub API 对未认证请求按 IP 限流（共享出口很容易 403）。API 没有 `tag_name` 时，
+   自动抓 `github.com/Ltsunahi/LiteFences/releases/latest` 页面里的 `/releases/tag/<版本>` 兜底。
+
+排障参数 `--update-test`：同步请求一次，日志应出现
+`更新接口正常：最新=v0.3.5 当前=0.3.5 地址=...`，退出码 0。

@@ -631,6 +631,53 @@ pub fn apply_order(items: &mut [DesktopItem], entries: &[(PathBuf, String)]) {
     });
 }
 
+/// 撤销恢复：一次套用顺序、显示名和自定义图标（快照里的第三列）。
+pub fn apply_order_entries(
+    items: &mut [DesktopItem],
+    entries: &[(PathBuf, String, Option<PathBuf>)],
+) {
+    for item in items.iter_mut() {
+        let Some((_, name, icon)) = entries
+            .iter()
+            .find(|(path, _, _)| same_path(path, &item.path))
+        else {
+            continue;
+        };
+        if !name.is_empty() {
+            item.name = name.clone();
+        }
+        let Some(icon_path) = icon else {
+            continue;
+        };
+        if item
+            .custom_icon
+            .as_ref()
+            .is_some_and(|known| same_path(known, icon_path))
+        {
+            continue;
+        }
+        if let Some(loaded) = load_icon_file(icon_path) {
+            if !item.icon.is_null() {
+                // SAFETY: 图标句柄由本模块创建，替换前释放一次。
+                unsafe { DestroyIcon(item.icon) };
+            }
+            item.icon = loaded;
+            item.custom_icon = Some(icon_path.clone());
+        }
+    }
+    let rank = |path: &Path| {
+        entries
+            .iter()
+            .position(|(known, _, _)| same_path(known, path))
+            .unwrap_or(usize::MAX)
+    };
+    items.sort_by(|left, right| {
+        rank(&left.path)
+            .cmp(&rank(&right.path))
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+}
+
 /// 用系统关联程序打开；快捷方式先解析再启动目标。
 pub fn launch(path: &Path) -> Result<(), String> {
     if path

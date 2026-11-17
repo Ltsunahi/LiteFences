@@ -1,6 +1,6 @@
 [package]
 name = "litefences"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2024"
 publish = false
 description = "轻量 Windows 桌面启动器：磨砂面板、图标分组、拖入引用"
@@ -41,6 +41,10 @@ shell = [
     "windows-sys/Win32_UI_Input_KeyboardAndMouse",
     "windows-sys/Win32_UI_Controls_Dialogs",
     "windows-sys/Win32_System_Registry",
+    "windows-sys/Win32_Networking_WinHttp",
+    "windows-sys/Win32_System_DataExchange",
+    "windows-sys/Win32_System_Memory",
+    "windows-sys/Win32_System_Ole",
 ]
 desktop-probe = ["dep:windows", "windows/Win32_System_Com", "windows/Win32_System_Ole", "windows/Win32_System_Variant", "windows/Win32_UI_Shell"]
 ui-acceptance = ["config-store", "windows-sys/Win32_System_StationsAndDesktops"]

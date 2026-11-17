@@ -46,6 +46,13 @@ pub struct SettingsSection {
     pub hotkey_key: u32,
     pub theme: String,
     pub lang: String,
+    /// 是否自动检查更新；旧配置没有这个字段时补 true。
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for SettingsSection {
@@ -55,6 +62,7 @@ impl Default for SettingsSection {
             hotkey_key: 0x20,         // Space
             theme: "space".to_string(),
             lang: "auto".to_string(),
+            check_updates: true,
         }
     }
 }
