@@ -115,11 +115,31 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             }
             // 输入框/热键窗口开着时别抢键盘，那些窗口自己处理。
             if !crate::text_input::is_open() && !crate::hotkey_dialog::is_open() {
-                // Ctrl+Z：撤销最近一步（拖动落错组、误移除、改名等）。
                 // SAFETY: 只读取按键状态。
-                let ctrl_held = unsafe { GetKeyState(i32::from(VK_CONTROL)) < 0 };
-                if ctrl_held && vk == 0x5A {
+                let (ctrl_held, shift_held) = unsafe {
+                    (
+                        GetKeyState(i32::from(VK_CONTROL)) < 0,
+                        GetKeyState(i32::from(VK_SHIFT)) < 0,
+                    )
+                };
+                // Ctrl+Z：撤销；Ctrl+Y / Ctrl+Shift+Z：重做；Ctrl+C：复制选中路径。
+                if ctrl_held && !shift_held && vk == 0x5A {
                     overlay::undo_last();
+                    return 1;
+                }
+                if ctrl_held && (vk == 0x59 || (shift_held && vk == 0x5A)) {
+                    overlay::redo_last();
+                    return 1;
+                }
+                if ctrl_held && !shift_held && vk == 0x43 && overlay::copy_selected_paths() {
+                    return 1;
+                }
+                if ctrl_held && shift_held && vk == 0x43 {
+                    overlay::set_all_groups_collapsed(true);
+                    return 1;
+                }
+                if ctrl_held && shift_held && vk == 0x45 {
+                    overlay::set_all_groups_collapsed(false);
                     return 1;
                 }
                 // Delete：移除多选（或键盘选中）的项。
@@ -138,8 +158,10 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                         )
                     };
                     if !ctrl && !alt && !win {
-                        if vk == u32::from(VK_BACK) && overlay::search_backspace() {
-                            return 1;
+                        if vk == u32::from(VK_BACK) {
+                            if overlay::search_backspace() || overlay::portal_back_if_drilled() {
+                                return 1;
+                            }
                         }
                         if vk == 0x20 && overlay::search_active() {
                             overlay::type_to_search(' ');
@@ -169,7 +191,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                         true
                     }
                     vk if vk == u32::from(VK_RETURN) => {
-                        overlay::open_selected();
+                        if ctrl_held && shift_held {
+                            overlay::open_selected_admin();
+                        } else {
+                            overlay::open_selected();
+                        }
                         true
                     }
                     vk if vk == u32::from(VK_TAB) => {
@@ -177,9 +203,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                             // 搜索时 Tab 不跳分组，避免选中落到被过滤掉的项上。
                             true
                         } else {
-                            // SAFETY: 只读取按键状态。
-                            let shift = unsafe { GetKeyState(i32::from(VK_SHIFT)) } < 0;
-                            overlay::cycle_group(shift);
+                            overlay::cycle_group(shift_held);
                             true
                         }
                     }

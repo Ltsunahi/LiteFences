@@ -64,6 +64,8 @@ const TIMER_SEARCH: usize = 2;
 const TIMER_DROP_NOTICE: usize = 3;
 /// 拖动到面板边缘时的自动滚动。
 const TIMER_AUTOSCROLL: usize = 5;
+const TIMER_GROUP_FOLD: usize = 6;
+const FOLD_MS: f32 = 220.0;
 
 /// 唤出后忽略点击的时间窗口，单位毫秒。
 const SHOW_COOLDOWN_MS: u64 = 350;
@@ -90,9 +92,112 @@ pub struct Layout {
     pub width: i32,
     pub height: i32,
     pub tiles: Vec<RECT>,
+    pub search_order: Vec<usize>,
     pub headers: Vec<Header>,
     /// 全部内容摆完后的纵向高度（含顶部工具条留白），比面板高时要滚动。
     pub content_height: i32,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct FoldSample {
+    at: Instant,
+    paint: Duration,
+    backdrop: Duration,
+    items: Duration,
+}
+
+/// 动画只保存两端布局。绘制与鼠标命中共用当前帧的矩形。
+pub struct GroupFold {
+    group: usize,
+    expanded: Layout,
+    collapsed: Layout,
+    start: Instant,
+    from: f32,
+    to: f32,
+    timing: Option<Vec<FoldSample>>,
+}
+
+impl GroupFold {
+    fn openness(&self, now: Instant) -> f32 {
+        let distance = (self.from - self.to).abs();
+        let elapsed = now.duration_since(self.start).as_secs_f32() * 1000.0;
+        if distance == 0.0 || elapsed >= FOLD_MS * distance { return self.to; }
+        let t = elapsed / (FOLD_MS * distance);
+        self.from + (self.to - self.from) * t * t * (3.0 - 2.0 * t)
+    }
+
+    fn endpoint(self) -> Layout {
+        if self.to == 0.0 { self.collapsed } else { self.expanded }
+    }
+
+    fn frame(&self, position: f32, layout: &mut Layout) {
+        let mix = |a: i32, b: i32| a + ((b - a) as f32 * position).round() as i32;
+        let rect = |a: RECT, b: RECT| RECT {
+            left: mix(a.left, b.left), right: mix(a.right, b.right),
+            top: mix(a.top, b.top), bottom: mix(a.bottom, b.bottom),
+        };
+        let closed = &self.collapsed;
+        let open = &self.expanded;
+        layout.content_height = mix(closed.content_height, open.content_height);
+        layout.cell_w = mix(closed.cell_w, open.cell_w);
+        layout.cell_h = mix(closed.cell_h, open.cell_h);
+        layout.icon = mix(closed.icon, open.icon);
+        for ((header, a), b) in layout.headers.iter_mut().zip(&closed.headers).zip(&open.headers) {
+            header.rect = rect(a.rect, b.rect);
+        }
+        let top = layout.headers[self.group].rect.bottom;
+        let bottom = layout.headers.get(self.group + 1).map_or(layout.content_height, |h| h.rect.top);
+        for ((tile, a), b) in layout.tiles.iter_mut().zip(&closed.tiles).zip(&open.tiles) {
+            if a.right > a.left || b.right <= b.left {
+                *tile = rect(*a, *b);
+            } else {
+                // 从标题下缘逐行揭开，只允许命中已露出的区域。
+                let offset = top - open.headers[self.group].rect.bottom;
+                let y = b.top + offset;
+                *tile = if y >= bottom { RECT::default() } else {
+                    RECT { top: y, bottom: (b.bottom + offset).min(bottom), ..*b }
+                };
+            }
+        }
+    }
+}
+
+fn finish_fold(app: &mut crate::state::App) {
+    if let Some(fold) = app.fold.take() {
+        unsafe { KillTimer(app.overlay, TIMER_GROUP_FOLD) };
+        if let Some(samples) = &fold.timing {
+            let mut gaps: Vec<_> = samples.windows(2).map(|w| w[1].at - w[0].at).collect();
+            let mut costs: Vec<_> = samples.iter().map(|s| s.paint).collect();
+            let mut backdrops: Vec<_> = samples.iter().map(|s| s.backdrop).collect();
+            let mut items: Vec<_> = samples.iter().map(|s| s.items).collect();
+            gaps.sort_unstable();
+            costs.sort_unstable();
+            backdrops.sort_unstable();
+            items.sort_unstable();
+            let ms = |v: &[Duration], pct: usize| v.get(v.len().saturating_sub(1) * pct / 100)
+                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+            log::info(&format!(
+                "折叠绘制 frames={} interval_ms={:.2} worst_ms={:.2} paint_ms={:.2} backdrop_ms={:.2} items_ms={:.2}",
+                samples.len(),
+                ms(&gaps, 50),
+                ms(&gaps, 100),
+                ms(&costs, 50),
+                ms(&backdrops, 50),
+                ms(&items, 50)
+            ));
+        }
+        app.layout = fold.endpoint();
+        clamp_scroll(app);
+        app.static_dirty = true;
+    }
+}
+
+fn group_motion_enabled(app: &crate::state::App) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION};
+    let mut enabled = 1i32;
+    unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&mut enabled as *mut i32).cast(), 0) };
+    app.shown && enabled != 0 && app.search.is_empty()
+        && (app.backdrop.is_some() || matches!(app.blur, BlurMode::Dim | BlurMode::Off))
 }
 
 #[repr(C)]
@@ -286,6 +391,7 @@ fn apply_accent(hwnd: HWND, alpha: u32) -> bool {
 /// 画面上（图标重叠、标签残影）。重建窗口的代价只有 1 毫秒级，换来的是永远干净的一帧。
 pub fn ensure_window() -> Result<HWND, String> {
     let app = state();
+    finish_fold(app);
     if !app.overlay.is_null() {
         // 窗口销毁前必须先注销 OLE 拖放，否则会留下悬空注册。
         crate::drop_target::detach();
@@ -355,20 +461,20 @@ pub fn show_panel() {
         );
         GetWindowRect(app.overlay, &mut client);
     }
-    // 入口目录的内容在变化时重读（目录时间戳没变就复用上次结果）。
-    crate::app::refresh_custom_availability();
-    crate::app::refresh_portals_if_stale();
+    // 后台异步检测自定义路径与入口目录可用性，不阻塞面板唤出。
+    crate::app::begin_availability_refresh(app.host);
     // DPI 必须在窗口挪到目标显示器之后再取，多屏不同缩放时才对。
     let dpi = unsafe { GetDpiForWindow(app.overlay) };
     let (client_w, client_h) = (client.right - client.left, client.bottom - client.top);
     let top_dip = if app.low_integrity { 88.0 } else { 48.0 };
-    let layout = compute_layout(
+    let layout = compute_layout_scaled(
         &app.items,
         &app.groups,
         client_w,
         client_h,
         dpi.max(96),
         top_dip,
+        app.density.scale_factor(),
     );
     app.layout = layout;
     if !app.search.is_empty() {
@@ -547,6 +653,7 @@ pub fn hide_panel() {
     if !app.shown {
         return;
     }
+    finish_fold(app);
     // 引导卡只出现一次：收起面板就算看过了（点「知道了」只是提前收起）。
     if !app.onboarded {
         app.onboarded = true;
@@ -621,6 +728,7 @@ fn free_caches() {
     app.buffer_height = 0;
     app.font_scale = 0.0;
     app.backdrop = None;
+    app.tile_cache = None;
     app.entrance = None;
     app.scroll = 0;
     app.static_dirty = true;
@@ -639,10 +747,19 @@ pub fn relayout() {
 
 /// 按当前 items/groups 重排；有搜索词时转给 `apply_search` 换成紧凑结果布局。
 fn rebuild_layout(app: &mut crate::state::App) {
+    finish_fold(app);
     let dpi = app.layout.dpi.max(96);
     let (width, height) = (app.layout.width, app.layout.height);
     let top_dip = if app.low_integrity { 88.0 } else { 48.0 };
-    let layout = compute_layout(&app.items, &app.groups, width, height, dpi, top_dip);
+    let layout = compute_layout_scaled(
+        &app.items,
+        &app.groups,
+        width,
+        height,
+        dpi,
+        top_dip,
+        app.density.scale_factor(),
+    );
     app.layout = layout;
     // 已有搜索词时（如 --search-test、热重排），重排后立刻换回紧凑结果布局。
     if !app.search.is_empty() {
@@ -799,7 +916,40 @@ fn toggle_group(index: usize) {
     }
     crate::groups::save(&app.groups);
     log::info(&format!("分组「{name}」{}", if collapsed { "折叠" } else { "展开" }));
-    relayout();
+    if !group_motion_enabled(app) || index >= app.layout.headers.len() {
+        relayout();
+        return;
+    }
+    let now = Instant::now();
+    let to = if collapsed { 0.0 } else { 1.0 };
+    if let Some(fold) = app.fold.as_mut().filter(|fold| fold.group == index) {
+        fold.from = fold.openness(now);
+        fold.to = to;
+        fold.start = now;
+    } else {
+        finish_fold(app);
+        let current = &app.layout;
+        let top = if app.low_integrity { 88.0 } else { 48.0 };
+        let next = compute_layout_scaled(
+            &app.items,
+            &app.groups,
+            current.width,
+            current.height,
+            current.dpi,
+            top,
+            app.density.scale_factor(),
+        );
+        let (expanded, collapsed_layout) = if collapsed { (current.clone(), next) } else { (next, current.clone()) };
+        app.fold = Some(GroupFold {
+            group: index, expanded, collapsed: collapsed_layout,
+            start: now, from: 1.0 - to, to,
+            timing: std::env::var_os("LITEFENCES_FOLD_TIMING").map(|_| Vec::with_capacity(64)),
+        });
+    }
+    if unsafe { SetTimer(app.overlay, TIMER_GROUP_FOLD, 10, None) } == 0 {
+        finish_fold(app);
+        unsafe { InvalidateRect(app.overlay, std::ptr::null(), 0) };
+    }
 }
 
 /// 右键图标：选择要移入的分组、新建分组，或做文件操作。多选时动作作用于整组。
@@ -880,6 +1030,10 @@ fn open_group_menu(indices: &[usize]) {
         }
         let reveal_label = wide(crate::i18n::t("打开所在位置", "Show in Explorer"));
         let properties_label = wide(crate::i18n::t("属性", "Properties"));
+        let admin_label = wide(crate::i18n::t("以管理员身份运行", "Run as administrator"));
+        if !multi && app.items.get(anchor).is_some_and(|item| !item.offline) {
+            AppendMenuW(menu, MF_STRING, 29, admin_label.as_ptr());
+        }
         let copy_label = wide(&if multi {
             if crate::i18n::is_en() {
                 format!("Copy {} paths", paths.len())
@@ -966,14 +1120,29 @@ fn open_header_menu(group_index: usize) {
         if menu.is_null() {
             return;
         }
-        let portal_sort = group.portal.and_then(|index| app.portals.get(index)).map(|portal| portal.sort);
+        let portal_info = group
+            .portal
+            .and_then(|index| app.portals.get(index).map(|p| (index, p.sort, p.is_drilled())));
         let rename = wide(crate::i18n::t("重命名分组…", "Rename group…"));
         let toggle = wide(if collapsed {
             crate::i18n::t("展开该组", "Expand")
         } else {
             crate::i18n::t("折叠该组", "Collapse")
         });
-        let delete = wide(if portal_sort.is_some() {
+        let all_collapsed = app.groups.iter().all(|g| g.collapsed);
+        let toggle_all = wide(if all_collapsed {
+            crate::i18n::t("全部展开", "Expand all")
+        } else {
+            crate::i18n::t("全部折叠", "Collapse all")
+        });
+        let rules_label = wide(&if group.rules.is_empty() {
+            crate::i18n::t("自动归组规则…", "Auto-group rules…").to_string()
+        } else if crate::i18n::is_en() {
+            format!("Auto-group rules… ({})", group.rules.len())
+        } else {
+            format!("自动归组规则…（{} 条）", group.rules.len())
+        });
+        let delete = wide(if portal_info.is_some() {
             crate::i18n::t("移除入口（目录内容不动）", "Remove folder entry (files untouched)")
         } else {
             crate::i18n::t(
@@ -982,13 +1151,25 @@ fn open_header_menu(group_index: usize) {
             )
         });
         AppendMenuW(menu, MF_STRING, 10, rename.as_ptr());
+        if portal_info.is_none() && !is_default {
+            AppendMenuW(menu, MF_STRING, 15, rules_label.as_ptr());
+        }
         AppendMenuW(menu, MF_STRING, 11, toggle.as_ptr());
+        AppendMenuW(menu, MF_STRING, 14, toggle_all.as_ptr());
         let open_folder = wide(crate::i18n::t("在资源管理器中打开", "Open in Explorer"));
-        if portal_sort.is_some() {
+        let refresh_entry = wide(crate::i18n::t("刷新该入口", "Refresh entry"));
+        let step_up = wide(crate::i18n::t("返回上一级", "Up one level"));
+        let reset_root = wide(crate::i18n::t("回到入口根目录", "Back to entry root"));
+        if let Some((_, _, drilled)) = portal_info {
+            AppendMenuW(menu, MF_STRING, 16, refresh_entry.as_ptr());
+            if drilled {
+                AppendMenuW(menu, MF_STRING, 17, step_up.as_ptr());
+                AppendMenuW(menu, MF_STRING, 18, reset_root.as_ptr());
+            }
             AppendMenuW(menu, MF_STRING, 13, open_folder.as_ptr());
         }
         // 入口分组多一份排序方式，当前项打勾。
-        if let Some(current) = portal_sort {
+        if let Some((_, current, _)) = portal_info {
             AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
             let modes = [
                 (20, crate::portals::SortMode::FolderFirst),
@@ -1046,6 +1227,19 @@ fn open_header_menu(group_index: usize) {
         match command as usize {
             10 => rename_group(group_index),
             11 => toggle_group(group_index),
+            14 => toggle_all_groups(),
+            15 => edit_group_rules(group_index),
+            16 => crate::app::refresh_portal(group_index),
+            17 => {
+                if let Some((portal_index, _, _)) = portal_info {
+                    crate::app::portal_step_up(portal_index);
+                }
+            }
+            18 => {
+                if let Some((portal_index, _, _)) = portal_info {
+                    crate::app::portal_reset_root(portal_index);
+                }
+            }
             12 => delete_group(group_index),
             13 => {
                 let dir = state()
@@ -1053,7 +1247,7 @@ fn open_header_menu(group_index: usize) {
                     .get(group_index)
                     .and_then(|group| group.portal)
                     .and_then(|index| state().portals.get(index))
-                    .map(|portal| portal.dir.clone());
+                    .map(|portal| portal.active_dir().to_path_buf());
                 if let Some(dir) = dir {
                     hide_panel();
                     if let Err(error) = crate::file_actions::reveal(&dir) {
@@ -1092,8 +1286,10 @@ fn rename_group(index: usize) {
     if let Some(index) = group.portal {
         if let Some(portal) = app.portals.get_mut(index) {
             portal.name = name.clone();
+            group.name = crate::app::portal_group_title(portal);
+        } else {
+            group.name = format!("{}{name}", crate::i18n::t("入口：", "Entry: "));
         }
-        group.name = format!("{}{name}", crate::i18n::t("入口：", "Entry: "));
         crate::portals::save(&app.portals);
     } else {
         group.name = name.clone();
@@ -1101,6 +1297,32 @@ fn rename_group(index: usize) {
     }
     log::info(&format!("分组改名：{current} → {name}"));
     relayout();
+}
+
+fn edit_group_rules(index: usize) {
+    let app = state();
+    let Some(group) = app.groups.get(index) else { return };
+    if group.portal.is_some() || group.name == crate::groups::DEFAULT_GROUP {
+        return;
+    }
+    let current = crate::groups::format_rules(&group.rules);
+    let title = crate::i18n::t(
+        "自动归组规则（如 .pdf, 会议, .xlsx，用逗号或空格分隔）",
+        "Auto-group rules (e.g. .pdf, report, .xlsx)",
+    );
+    let Some(input) = crate::text_input::ask(title, &current) else {
+        return;
+    };
+    if let Some(moved) = crate::app::set_group_rules(index, &input)
+        && state().shown
+    {
+        let notice = if crate::i18n::is_en() {
+            format!("Rules saved ({moved} item(s) grouped)")
+        } else {
+            format!("规则已保存（归入 {moved} 项）")
+        };
+        show_drop_notice(notice);
+    }
 }
 
 fn delete_group(index: usize) {
@@ -1186,6 +1408,7 @@ fn apply_group_command(
             }
         }
         4 => crate::app::clear_item_icon(anchor),
+        29 => launch_and_hide(anchor, true),
         30 => {
             let path = paths[0].clone();
             // 资源管理器需要到前台，先把全屏置顶面板收起来。
@@ -1204,30 +1427,7 @@ fn apply_group_command(
             }
         }
         32 => {
-            let text = paths
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join("\r\n");
-            let hwnd = app.overlay;
-            match crate::file_actions::copy_text(hwnd, &text) {
-                Ok(()) => {
-                    log::info(&format!("已复制 {} 条路径", paths.len()));
-                    let notice = if crate::i18n::is_en() {
-                        if paths.len() > 1 {
-                            format!("Copied {} paths", paths.len())
-                        } else {
-                            "Copied path".to_string()
-                        }
-                    } else if paths.len() > 1 {
-                        format!("已复制 {} 条路径", paths.len())
-                    } else {
-                        "已复制路径".to_string()
-                    };
-                    show_drop_notice(notice);
-                }
-                Err(error) => log::error(&format!("复制路径失败：{error}")),
-            }
+            let _ = copy_paths_to_clipboard(app.overlay, paths);
         }
         33 => {
             let indices = indices_for_paths(app, paths);
@@ -1261,7 +1461,7 @@ fn apply_group_command(
     }
 }
 
-/// 分节布局：每个分组一个标题行，下面是该组的图标网格。
+/// 分节布局：每个分组一个标题行，下面是该组的图标网格（默认标准缩放）。
 pub fn compute_layout(
     items: &[crate::icons::DesktopItem],
     groups: &[crate::groups::Group],
@@ -1270,7 +1470,21 @@ pub fn compute_layout(
     dpi: u32,
     top_dip: f32,
 ) -> Layout {
+    compute_layout_scaled(items, groups, width, height, dpi, top_dip, 1.0)
+}
+
+/// 支持按 `density`（紧凑/标准/偏大）缩放格子与图标的布局计算。
+pub fn compute_layout_scaled(
+    items: &[crate::icons::DesktopItem],
+    groups: &[crate::groups::Group],
+    width: i32,
+    height: i32,
+    dpi: u32,
+    top_dip: f32,
+    density: f32,
+) -> Layout {
     let scale = dpi as f32 / 96.0;
+    let factor = density.clamp(0.75, 1.35);
     let zero = RECT {
         left: 0,
         top: 0,
@@ -1280,13 +1494,14 @@ pub fn compute_layout(
     let mut layout = Layout {
         scale,
         dpi,
-        icon: (48.0 * scale).round() as i32,
-        cell_w: (120.0 * scale).round() as i32,
-        cell_h: (128.0 * scale).round() as i32,
+        icon: (48.0 * scale * factor).round() as i32,
+        cell_w: (120.0 * scale * factor).round() as i32,
+        cell_h: (128.0 * scale * factor).round() as i32,
         cols: 1,
         width,
         height,
         tiles: vec![zero; items.len() + 1],
+        search_order: Vec::new(),
         headers: Vec::new(),
         content_height: 0,
     };
@@ -1335,9 +1550,10 @@ pub fn compute_layout(
     layout.cols = ((widest as f32 * aspect).sqrt().round() as usize)
         .clamp(1, cols_limit(layout.cell_w))
         .min(widest);
-    // 格子最小只缩到 96×104（按 DPI 缩放），再小名字就看不清了；剩下的交给滚动。
-    let floor_w = ((96.0 * scale) as i32).max(56);
-    let floor_h = ((104.0 * scale) as i32).max(64);
+    // 格子最小按档位缩放兜底；再小名字就看不清了，剩下的交给滚动。
+    let floor_factor = factor.clamp(0.8, 1.15);
+    let floor_w = ((96.0 * scale * floor_factor) as i32).max(52).min((width - 80).max(56));
+    let floor_h = ((104.0 * scale * floor_factor) as i32).max(60);
     // 第一步：放不下就等比缩小格子。
     for _ in 0..6 {
         let total = estimate(layout.cols, layout.cell_h);
@@ -1582,17 +1798,20 @@ fn paint(hwnd: HWND) {
         let mut ps = PAINTSTRUCT::default();
         let hdc = BeginPaint(hwnd, &mut ps);
         let app = state();
+        let timing_on = app.fold.as_ref().is_some_and(|f| f.timing.is_some());
+        let timed = timing_on.then(Instant::now);
+        let mut split = (Duration::ZERO, Duration::ZERO);
         let width = app.layout.width;
         let height = app.layout.height;
         ensure_buffer(hdc, width, height);
         let cache = state().buffer_dc;
         let app = state();
         if cache.is_null() {
-            render_static(hdc, app, width, height);
+            split = render_static(hdc, app, width, height);
         } else {
             let redrawn = app.static_dirty;
             if redrawn {
-                render_static(cache, app, width, height);
+                split = render_static(cache, app, width, height);
                 app.static_dirty = false;
             }
             // 亚克力模式靠窗口自身的浓度做动画（下面 paint 会照常贴图），其它模式用位图叠加淡入。
@@ -1722,6 +1941,15 @@ fn paint(hwnd: HWND) {
         draw_empty_hint(hdc, app);
         draw_selection(hdc, app);
         EndPaint(hwnd, &ps);
+        if let Some(start) = timed && let Some(samples) = app.fold.as_mut().and_then(|f| f.timing.as_mut()) {
+            windows_sys::Win32::Graphics::Gdi::GdiFlush();
+            samples.push(FoldSample {
+                at: start,
+                paint: start.elapsed(),
+                backdrop: split.0,
+                items: split.1,
+            });
+        }
     }
 }
 
@@ -1925,10 +2153,12 @@ fn dismiss_onboarding() {
 }
 
 /// 画“静态帧”：底板 + 图标 + 文字。只在内容变化时调用。
-fn render_static(hdc: HDC, app: &mut crate::state::App, width: i32, height: i32) {
+fn render_static(hdc: HDC, app: &mut crate::state::App, width: i32, height: i32) -> (Duration, Duration) {
+    let timing_on = app.fold.as_ref().is_some_and(|f| f.timing.is_some());
     // SAFETY: 调用方保证 DC 有效。
     unsafe {
-        if let Some(backdrop) = app.backdrop.as_ref() {
+        let backdrop_start = timing_on.then(Instant::now);
+        if let Some(backdrop) = app.backdrop.as_mut() {
             backdrop.draw(hdc, width, height);
         } else if app.blur == BlurMode::Dim || app.blur == BlurMode::Off {
             let brush = CreateSolidBrush(app.theme.bar as COLORREF);
@@ -1941,6 +2171,7 @@ fn render_static(hdc: HDC, app: &mut crate::state::App, width: i32, height: i32)
             FillRect(hdc, &full, brush);
             DeleteObject(brush as _);
         }
+        let backdrop_cost = backdrop_start.map_or(Duration::ZERO, |t| t.elapsed());
         // 字体走进程内缓存，避免每次重画都 CreateFont。
         let font = ui_font(app);
         if !font.is_null() {
@@ -1955,10 +2186,19 @@ fn render_static(hdc: HDC, app: &mut crate::state::App, width: i32, height: i32)
         };
         draw_banner(hdc, app, &full);
         // 滚动时内容会移到工具条/横幅底下，这里把内容裁到可见区里。
+        let top = content_top(app);
+        let content_rect = RECT {
+            left: 0,
+            top,
+            right: width,
+            bottom: height,
+        };
         let saved = SaveDC(hdc);
-        IntersectClipRect(hdc, 0, content_top(app), width, height);
-        draw_headers(hdc, app, &full);
-        draw_items(hdc, app, &full);
+        IntersectClipRect(hdc, 0, top, width, height);
+        draw_headers(hdc, app, &content_rect);
+        let items_start = timing_on.then(Instant::now);
+        draw_items(hdc, app, &content_rect, font);
+        let items_cost = items_start.map_or(Duration::ZERO, |t| t.elapsed());
         draw_search_empty(hdc, app);
         draw_sticky_header(hdc, app);
         RestoreDC(hdc, saved);
@@ -1968,6 +2208,7 @@ fn render_static(hdc: HDC, app: &mut crate::state::App, width: i32, height: i32)
             draw_toolbar(hdc, app, &full);
             draw_search_box(hdc, app, &full);
         }
+        (backdrop_cost, items_cost)
     }
 }
 
@@ -2046,10 +2287,27 @@ fn draw_sticky_header(hdc: HDC, app: &crate::state::App) {
     draw_one_header(hdc, app, header, rect, scale);
 }
 
+fn portal_up_rect(header_rect: RECT, scale: f32) -> RECT {
+    let width = (86.0 * scale) as i32;
+    let height = (24.0 * scale) as i32;
+    let top = header_rect.top + (header_rect.bottom - header_rect.top - height) / 2;
+    let right = (header_rect.right - (6.0 * scale) as i32).max(header_rect.left + width);
+    RECT {
+        left: right - width,
+        top,
+        right,
+        bottom: top + height,
+    }
+}
+
 fn draw_one_header(hdc: HDC, app: &crate::state::App, header: &Header, rect: RECT, scale: f32) {
     let Some(group) = app.groups.get(header.group) else {
         return;
     };
+    let drilled = group
+        .portal
+        .and_then(|index| app.portals.get(index))
+        .is_some_and(|portal| portal.is_drilled());
     // 搜索时标题显示命中数，而不是分组总数。
     let count = if app.search.is_empty() {
         header.count
@@ -2081,10 +2339,11 @@ fn draw_one_header(hdc: HDC, app: &crate::state::App, header: &Header, rect: REC
         let brush = CreateSolidBrush(app.theme.line);
         FillRect(hdc, &line, brush);
         DeleteObject(brush as _);
+        let up_rect = drilled.then(|| portal_up_rect(rect, scale));
         let mut text_rect = RECT {
             left: rect.left + (6.0 * scale) as i32,
             top: rect.top,
-            right: rect.right,
+            right: up_rect.map_or(rect.right, |r| r.left - (8.0 * scale) as i32),
             bottom: rect.bottom,
         };
         SetBkMode(hdc, TRANSPARENT as i32);
@@ -2094,8 +2353,18 @@ fn draw_one_header(hdc: HDC, app: &crate::state::App, header: &Header, rect: REC
             text.as_ptr(),
             -1,
             &mut text_rect,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
         );
+        if let Some(up_rect) = up_rect {
+            draw_chip(
+                hdc,
+                up_rect,
+                crate::i18n::t("← 上一级", "← Up"),
+                app.theme.chip,
+                app.theme.text,
+                scale,
+            );
+        }
     }
 }
 
@@ -2158,10 +2427,32 @@ fn draw_search_empty(hdc: HDC, app: &crate::state::App) {
     }
 }
 
-fn draw_items(hdc: HDC, app: &crate::state::App, paint: &RECT) {
+fn draw_items(hdc: HDC, app: &mut crate::state::App, paint: &RECT, font: HFONT) {
     let scale = app.layout.scale;
     // 注：在玻璃/亚克力表面上无法“擦除”已画像素，所以不做悬停描边，
     // 避免移动鼠标后留下残影。
+    let use_cache = (app.backdrop.is_some() || matches!(app.blur, BlurMode::Dim | BlurMode::Off))
+        && !app.items.is_empty();
+    let mut tile_cache = if use_cache {
+        let spec = crate::tile_cache::TileSpec {
+            cell_w: app.layout.cell_w,
+            icon: app.layout.icon,
+            scale_bits: scale.to_bits(),
+            text_color: app.theme.text,
+            shadow_color: app.theme.label_shadow,
+        };
+        let mut cached = app.tile_cache.take();
+        let ready = match cached.as_mut() {
+            Some(c) => c.prepare(hdc, spec, app.items.len(), app.fold.is_some()),
+            None => {
+                cached = crate::tile_cache::TileCache::new(hdc, spec, app.items.len());
+                cached.is_some()
+            }
+        };
+        if ready { cached } else { None }
+    } else {
+        None
+    };
 
     // SAFETY: 所有 GDI 对象都在本函数内创建并在末尾释放。
     unsafe {
@@ -2180,7 +2471,9 @@ fn draw_items(hdc: HDC, app: &crate::state::App, paint: &RECT) {
                 if !app.search.is_empty() {
                     continue;
                 }
+                let saved = clip_fold_tile(hdc, app, tile);
                 draw_add_tile(hdc, tile, scale, icon, app.theme);
+                if saved != 0 { RestoreDC(hdc, saved); }
                 continue;
             }
             let item = &app.items[index];
@@ -2195,18 +2488,50 @@ fn draw_items(hdc: HDC, app: &crate::state::App, paint: &RECT) {
                 // 拖动中的图标由跟随图层绘制；搜索时未命中的先留空。
                 continue;
             }
-            if !item.icon.is_null() {
-                let x = tile.left + (app.layout.cell_w - icon) / 2;
-                let y = tile.top + ((12.0 * scale) as i32);
-                DrawIconEx(hdc, x, y, item.icon, icon, icon, 0, std::ptr::null_mut(), DI_NORMAL);
-            }
-            if item.offline {
-                let label = format!("{} · {}", crate::i18n::t("暂不可用", "Offline"), item.name);
-                draw_label(hdc, &label, tile, scale, icon, app.theme);
+            let saved = clip_fold_tile(hdc, app, tile);
+            let label = if item.offline {
+                Some(format!("{} · {}", crate::i18n::t("暂不可用", "Offline"), item.name))
             } else {
-                draw_label(hdc, &item.name, tile, scale, icon, app.theme);
+                None
+            };
+            let label_ref = label.as_deref().unwrap_or(item.name.as_str());
+            let drew_cached = tile_cache.as_mut().is_some_and(|cache| {
+                cache.draw_tile(
+                    hdc,
+                    index,
+                    item.icon,
+                    label_ref,
+                    font,
+                    tile,
+                    app.layout.cell_w,
+                    icon,
+                    scale,
+                )
+            });
+            if !drew_cached {
+                if !item.icon.is_null() {
+                    let x = tile.left + (app.layout.cell_w - icon) / 2;
+                    let y = tile.top + ((12.0 * scale) as i32);
+                    DrawIconEx(hdc, x, y, item.icon, icon, icon, 0, std::ptr::null_mut(), DI_NORMAL);
+                }
+                draw_label(hdc, label_ref, tile, scale, icon, app.theme);
             }
+            if saved != 0 { RestoreDC(hdc, saved); }
         }
+    }
+    if use_cache {
+        app.tile_cache = tile_cache;
+    }
+}
+
+fn clip_fold_tile(hdc: HDC, app: &crate::state::App, tile: RECT) -> i32 {
+    if app.fold.is_none() || (tile.bottom - tile.top) >= app.layout.cell_h {
+        return 0;
+    }
+    unsafe {
+        let saved = SaveDC(hdc);
+        if saved != 0 { IntersectClipRect(hdc, tile.left, tile.top, tile.right, tile.bottom); }
+        saved
     }
 }
 
@@ -2650,6 +2975,22 @@ fn remove_chip_rect(app: &crate::state::App) -> RECT {
     }
 }
 
+/// 工具条右侧第二个按钮：一键全部折叠/全部展开。
+fn fold_all_chip_rect(app: &crate::state::App) -> RECT {
+    let scale = app.layout.scale;
+    let bar = toolbar_rect(app);
+    let width = (104.0 * scale) as i32;
+    let height = (32.0 * scale) as i32;
+    let top = bar.top + (bar.bottom - bar.top - height) / 2;
+    let right = remove_chip_rect(app).left - (10.0 * scale) as i32;
+    RECT {
+        left: right - width,
+        top,
+        right,
+        bottom: top + height,
+    }
+}
+
 /// 画顶部工具条与两个按钮。
 fn draw_toolbar(hdc: HDC, app: &crate::state::App, paint: &RECT) {
     let bar = toolbar_rect(app);
@@ -2686,6 +3027,19 @@ fn draw_toolbar(hdc: HDC, app: &crate::state::App, paint: &RECT) {
         hdc,
         new_group_chip_rect(app),
         crate::i18n::t("＋ 新建分组", "+ New group"),
+        theme.chip,
+        theme.text,
+        scale,
+    );
+    let all_collapsed = !app.groups.is_empty() && app.groups.iter().all(|g| g.collapsed);
+    draw_chip(
+        hdc,
+        fold_all_chip_rect(app),
+        if all_collapsed {
+            crate::i18n::t("全部展开", "Expand all")
+        } else {
+            crate::i18n::t("全部折叠", "Collapse all")
+        },
         theme.chip,
         theme.text,
         scale,
@@ -2801,9 +3155,7 @@ fn visible(app: &crate::state::App, index: usize) -> bool {
     if app.search.is_empty() {
         return true;
     }
-    app.items
-        .get(index)
-        .is_some_and(|item| crate::search::matches(&item.name, &app.search))
+    app.layout.tiles.get(index).is_some_and(|tile| tile.right > tile.left)
 }
 
 /// 画工具栏里的搜索框：收起时是放大镜，展开后直接在工具条上显示关键字（无底板）。
@@ -2884,24 +3236,56 @@ fn draw_search_box(hdc: HDC, app: &crate::state::App, paint: &RECT) {
 }
 
 fn count_matches(app: &crate::state::App) -> usize {
-    (0..app.items.len()).filter(|index| visible(app, *index)).count()
+    if app.search.is_empty() { app.items.len() } else { app.layout.search_order.len() }
 }
 
-/// 搜索结果按得分排序；同分保持面板顺序。
+fn rank_search_candidates(mut scored: Vec<(u32, u32, u64, usize)>) -> Vec<usize> {
+    scored.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| right.1.cmp(&left.1))
+            .then_with(|| right.2.cmp(&left.2))
+            .then_with(|| left.3.cmp(&right.3))
+    });
+    scored.into_iter().map(|(_, _, _, index)| index).collect()
+}
+
+/// 搜索结果按名称、后缀或分组匹配得分排序；同分按使用次数和最近启动时间加权，再同则保持面板顺序。
 fn search_results(app: &crate::state::App) -> Vec<usize> {
     if app.search.is_empty() {
         return Vec::new();
     }
-    let mut scored: Vec<(u32, usize)> = app
+    let query = app.search.trim().to_lowercase();
+    let group_scores: Vec<Option<u32>> = app
+        .groups
+        .iter()
+        .map(|group| {
+            crate::search::group_fallback_score(&crate::groups::display_name(&group.name), &query)
+        })
+        .collect();
+    let scored: Vec<(u32, u32, u64, usize)> = app
         .items
         .iter()
         .enumerate()
         .filter_map(|(index, item)| {
-            crate::search::score(&item.name, &app.search).map(|score| (score, index))
+            let name_score = crate::search::rank(item.search_keys(), &query);
+            let ext_score = crate::search::match_extension(&item.path, &query);
+            let group_score = crate::groups::group_of_or_default(&app.groups, &item.path)
+                .and_then(|group_idx| group_scores.get(group_idx).copied().flatten());
+            let score = [name_score, ext_score, group_score]
+                .into_iter()
+                .flatten()
+                .max()?;
+            let usage = app
+                .usage
+                .get(&crate::store::usage_key(&item.path))
+                .copied()
+                .unwrap_or_default();
+            Some((score, usage.count, usage.last_used, index))
         })
         .collect();
-    scored.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
-    scored.into_iter().map(|(_, index)| index).collect()
+    rank_search_candidates(scored)
 }
 
 /// 唤出后直接敲字母/数字：打开搜索并追加字符，不抢焦点也不触发输入法。
@@ -2989,6 +3373,7 @@ fn search_layout(app: &crate::state::App, results: &[usize]) -> Layout {
         app.items.len() + 1
     ];
     layout.headers.clear();
+    layout.search_order = results.to_vec();
     let top = content_top(app);
     let (tiles, cols, content_height) =
         search_grid(layout.width, layout.cell_w, layout.cell_h, top, results.len());
@@ -3002,6 +3387,7 @@ fn search_layout(app: &crate::state::App, results: &[usize]) -> Layout {
 
 /// 关键字变化后：换成紧凑结果布局、选中第一个结果，并重画一帧。
 fn apply_search(app: &mut crate::state::App) {
+    finish_fold(app);
     if app.search.is_empty() {
         // 退格删空：恢复分组布局，不突然选中第一项。
         app.selected = None;
@@ -3119,7 +3505,20 @@ pub fn search_edit_key(message: &MSG) -> bool {
     }
     match message.wParam as u16 {
         VK_RETURN if message.lParam & (1 << 30) != 0 => {}
-        VK_RETURN => open_selected(),
+        VK_RETURN => {
+            // SAFETY: 只读取按键修饰状态。
+            let (ctrl, shift) = unsafe {
+                (
+                    GetKeyState(i32::from(VK_CONTROL)) < 0,
+                    GetKeyState(i32::from(VK_SHIFT)) < 0,
+                )
+            };
+            if ctrl && shift {
+                open_selected_admin();
+            } else {
+                open_selected();
+            }
+        }
         VK_ESCAPE => handle_escape(),
         VK_UP => move_selection(0, -1),
         VK_DOWN => move_selection(0, 1),
@@ -3557,7 +3956,7 @@ pub fn move_selection(dx: i32, dy: i32) {
         if step == 0 {
             return;
         }
-        let results = search_results(app);
+        let results = &app.layout.search_order;
         if results.is_empty() {
             return;
         }
@@ -3585,18 +3984,27 @@ pub fn move_selection(dx: i32, dy: i32) {
 
 /// 键盘 Enter：打开当前选中项；搜索时打开第一个可见结果。
 pub fn open_selected() {
+    open_selected_with(false);
+}
+
+/// Ctrl+Shift+Enter：以管理员身份运行当前选中项。
+pub fn open_selected_admin() {
+    open_selected_with(true);
+}
+
+fn open_selected_with(as_admin: bool) {
     let selected = {
         let app = state();
         if !app.search.is_empty() {
             app.selected
                 .filter(|index| visible(app, *index))
-                .or_else(|| search_results(app).first().copied())
+                .or_else(|| app.layout.search_order.first().copied())
         } else {
             app.selected.filter(|index| *index < app.items.len())
         }
     };
     if let Some(index) = selected {
-        launch_and_hide(index);
+        launch_and_hide(index, as_admin);
     }
 }
 
@@ -3736,9 +4144,139 @@ fn selection_focus(selection: &[usize], clicked: usize) -> Option<usize> {
     if selection.contains(&clicked) { Some(clicked) } else { selection.last().copied() }
 }
 
+/// Ctrl+Shift+C / Ctrl+Shift+E 或点击顶部按钮：一键全部折叠或全部展开。
+pub fn set_all_groups_collapsed(collapsed: bool) {
+    let app = state();
+    if app.groups.is_empty() {
+        return;
+    }
+    finish_fold(app);
+    let mut changed = false;
+    for group in &mut app.groups {
+        if group.collapsed != collapsed {
+            group.collapsed = collapsed;
+            changed = true;
+        }
+        if let Some(portal_index) = group.portal
+            && let Some(portal) = app.portals.get_mut(portal_index)
+        {
+            portal.collapsed = collapsed;
+        }
+    }
+    if changed {
+        crate::groups::save(&app.groups);
+        crate::portals::save(&app.portals);
+        app.tile_cache = None;
+        relayout();
+    }
+    log::info(if collapsed { "分组全部折叠" } else { "分组全部展开" });
+    if state().shown {
+        show_drop_notice(if collapsed {
+            crate::i18n::t("已折叠全部分组", "Collapsed all groups").into()
+        } else {
+            crate::i18n::t("已展开全部分组", "Expanded all groups").into()
+        });
+    }
+}
+
+fn toggle_all_groups() {
+    let all_collapsed = state().groups.iter().all(|g| g.collapsed);
+    set_all_groups_collapsed(!all_collapsed);
+}
+
 /// Ctrl+Z：撤销最近一步。
 pub fn undo_last() {
     crate::app::undo();
+}
+
+/// Ctrl+Y / Ctrl+Shift+Z：重做最近一次撤销的改动。
+pub fn redo_last() {
+    crate::app::redo();
+}
+
+fn copy_paths_to_clipboard(hwnd: HWND, paths: &[std::path::PathBuf]) -> bool {
+    if paths.is_empty() {
+        return false;
+    }
+    let text = paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\r\n");
+    match crate::file_actions::copy_text(hwnd, &text) {
+        Ok(()) => {
+            log::info(&format!("已复制 {} 条路径", paths.len()));
+            let notice = if crate::i18n::is_en() {
+                if paths.len() > 1 {
+                    format!("Copied {} paths", paths.len())
+                } else {
+                    "Copied path".to_string()
+                }
+            } else if paths.len() > 1 {
+                format!("已复制 {} 条路径", paths.len())
+            } else {
+                "已复制路径".to_string()
+            };
+            show_drop_notice(notice);
+            true
+        }
+        Err(error) => {
+            log::error(&format!("复制路径失败：{error}"));
+            false
+        }
+    }
+}
+
+/// Ctrl+C：复制当前选中的图标路径（支持多选和搜索结果首项）。
+pub fn copy_selected_paths() -> bool {
+    let app = state();
+    let mut indices = app.selection.clone();
+    if indices.is_empty() {
+        let fallback = if !app.search.is_empty() {
+            app.selected
+                .filter(|index| visible(app, *index))
+                .or_else(|| app.layout.search_order.first().copied())
+        } else {
+            app.selected.filter(|index| *index < app.items.len())
+        };
+        if let Some(index) = fallback {
+            indices.push(index);
+        }
+    }
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    for index in indices {
+        let Some(item) = app.items.get(index) else {
+            continue;
+        };
+        if paths.iter().any(|known| icons::same_path(known, &item.path)) {
+            continue;
+        }
+        paths.push(item.path.clone());
+    }
+    copy_paths_to_clipboard(app.overlay, &paths)
+}
+
+/// 非搜索态按 Backspace：若当前有下钻中的文件夹入口，则返回上一级目录。
+pub fn portal_back_if_drilled() -> bool {
+    let portal_index = {
+        let app = state();
+        let from_selected = app
+            .selected
+            .and_then(|index| app.items.get(index))
+            .filter(|item| item.source == icons::ItemSource::Portal)
+            .and_then(|item| crate::groups::group_of(&app.groups, &item.path))
+            .and_then(|g| app.groups.get(g))
+            .and_then(|g| g.portal)
+            .filter(|&p| app.portals.get(p).is_some_and(|portal| portal.is_drilled()));
+        from_selected.or_else(|| {
+            app.portals
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(i, portal)| portal.is_drilled().then_some(i))
+        })
+    };
+    portal_index.is_some_and(crate::app::portal_step_up)
 }
 
 /// Delete：移除多选（或键盘选中）的项；返回是否处理了按键。
@@ -3882,20 +4420,31 @@ fn draw_empty_hint(hdc: HDC, app: &crate::state::App) {
     }
 }
 
-fn launch_and_hide(index: usize) {    let app = state();
+fn launch_and_hide(index: usize, as_admin: bool) {
+    let app = state();
     let Some(item) = app.items.get(index) else {
         return;
     };
     let path = item.path.clone();
-    if item.source == icons::ItemSource::Custom && !path.exists() {
+    let is_portal = item.source == icons::ItemSource::Portal;
+    let is_custom = item.source == icons::ItemSource::Custom;
+    if !as_admin && is_portal && path.is_dir() && crate::app::enter_portal_subdir(&path) {
+        return;
+    }
+    if is_custom && !path.exists() {
         crate::app::refresh_custom_availability();
         relayout();
         show_drop_notice(crate::i18n::t("路径暂不可用，请检查设备连接", "Path unavailable. Check the device connection.").into());
         return;
     }
     hide_panel();
-    match icons::launch(&path) {
-        Ok(()) => {}
+    let result = if as_admin {
+        icons::launch_as_admin(&path)
+    } else {
+        icons::launch(&path)
+    };
+    match result {
+        Ok(()) => crate::app::record_launch(&path),
         Err(error) => log::error(&error),
     }
 }
@@ -3926,6 +4475,21 @@ unsafe extern "system" fn overlay_proc(
         }
         WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
         WM_NCHITTEST => HTCLIENT as LRESULT,
+        WM_TIMER if wparam == TIMER_GROUP_FOLD => {
+            let app = state();
+            if let Some(fold) = app.fold.as_ref() {
+                let position = fold.openness(Instant::now());
+                if position == fold.to {
+                    finish_fold(app);
+                } else {
+                    fold.frame(position, &mut app.layout);
+                    clamp_scroll(app);
+                }
+                app.static_dirty = true;
+                unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
+            }
+            0
+        }
         WM_TIMER if wparam == TIMER_SEARCH => {
             let app = state();
             let finished = app
@@ -4208,7 +4772,7 @@ unsafe extern "system" fn overlay_proc(
                         .map(|item| item.name.clone())
                         .unwrap_or_default();
                     log::info(&format!("单击图标 #{} {name}", drag.from));
-                    launch_and_hide(drag.from);
+                    launch_and_hide(drag.from, false);
                 }
             }
             0
@@ -4261,11 +4825,12 @@ unsafe extern "system" fn overlay_proc(
                         return 0;
                     }
                 }
-                let (in_settings, in_new_group, in_chip, in_search) = unsafe {
+                let (in_settings, in_new_group, in_fold_all, in_chip, in_search) = unsafe {
                     let app = state();
                     (
                         PtInRect(&settings_chip_rect(app), point) != 0,
                         PtInRect(&new_group_chip_rect(app), point) != 0,
+                        PtInRect(&fold_all_chip_rect(app), point) != 0,
                         PtInRect(&remove_chip_rect(app), point) != 0,
                         PtInRect(&search_rect(app), point) != 0,
                     )
@@ -4279,6 +4844,11 @@ unsafe extern "system" fn overlay_proc(
                 if in_new_group {
                     crate::app::clear_selection();
                     create_group();
+                    return 0;
+                }
+                if in_fold_all {
+                    crate::app::clear_selection();
+                    toggle_all_groups();
                     return 0;
                 }
                 if in_search {
@@ -4310,9 +4880,35 @@ unsafe extern "system" fn overlay_proc(
                     close_search();
                     return 0;
                 }
-                // 整条分组标题都能点：按下先记录，松开没拖动就折叠/展开，拖过就是调顺序。
+                // 整条分组标题都能点：若命中下钻入口的「← 上一级」按钮直接返回上一级；
+                // 否则按下先记录，松开没拖动就折叠/展开，拖过就是调顺序。
                 if let Some(group) = header_at(x, y) {
                     crate::app::clear_selection();
+                    let drilled_up = {
+                        let app = state();
+                        app.groups
+                            .get(group)
+                            .and_then(|g| g.portal)
+                            .filter(|&p| app.portals.get(p).is_some_and(|portal| portal.is_drilled()))
+                            .and_then(|portal_index| {
+                                let header_rect = sticky_header(app)
+                                    .filter(|(g, _)| *g == group)
+                                    .map(|(_, rect)| rect)
+                                    .or_else(|| {
+                                        app.layout
+                                            .headers
+                                            .iter()
+                                            .find(|h| h.group == group)
+                                            .map(|h| view_rect(app, h.rect))
+                                    })?;
+                                let up = portal_up_rect(header_rect, app.layout.scale);
+                                (unsafe { PtInRect(&up, point) != 0 }).then_some(portal_index)
+                            })
+                    };
+                    if let Some(portal_index) = drilled_up {
+                        crate::app::portal_step_up(portal_index);
+                        return 0;
+                    }
                     let app = state();
                     app.pending_remove = None;
                     app.header_drag = Some(crate::state::HeaderDragState {
@@ -4464,6 +5060,7 @@ unsafe extern "system" fn overlay_proc(
         WM_LBUTTONDBLCLK => 0,
         WM_DPICHANGED => {
             let app = state();
+            finish_fold(app);
             let dpi = (wparam >> 16) & 0xffff;
             let dpi = if dpi == 0 { 96 } else { dpi as u32 };
             // lparam 是系统建议的新窗口矩形，跟着它调整，避免缩放比例错位。
@@ -4489,7 +5086,15 @@ unsafe extern "system" fn overlay_proc(
                 }
             }
             let top_dip = if app.low_integrity { 88.0 } else { 48.0 };
-            let layout = compute_layout(&app.items, &app.groups, width, height, dpi, top_dip);
+            let layout = compute_layout_scaled(
+                &app.items,
+                &app.groups,
+                width,
+                height,
+                dpi,
+                top_dip,
+                app.density.scale_factor(),
+            );
             app.layout = layout;
             app.scroll = 0;
             app.static_dirty = true;
@@ -4597,6 +5202,7 @@ mod layout_tests {
 
     fn item(name: &str) -> DesktopItem {
         DesktopItem {
+            search_keys: Default::default(),
             offline: false,
             path: PathBuf::from(format!("C:\\桌面\\{name}")),
             name: name.to_string(),
@@ -4618,6 +5224,48 @@ mod layout_tests {
             groups[index % groups_n].paths.push(item.path.clone());
         }
         (items, groups)
+    }
+
+    #[test]
+    fn fold_clips_hit_rects_and_moves_the_next_header() {
+        let (items, mut groups) = scene(12, 2);
+        let expanded = compute_layout(&items, &groups, 1280, 800, 96, 48.0);
+        groups[0].collapsed = true;
+        let collapsed = compute_layout(&items, &groups, 1280, 800, 96, 48.0);
+        let now = std::time::Instant::now();
+        let mut layout = expanded.clone();
+        let mut fold = super::GroupFold { group: 0, expanded, collapsed, start: now, from: 1.0, to: 0.0, timing: None };
+        let mid = now + std::time::Duration::from_millis(110);
+        let position = fold.openness(mid);
+        fold.frame(position, &mut layout);
+        let header_y = layout.headers[1].rect.top;
+        assert!(header_y > fold.collapsed.headers[1].rect.top && header_y < fold.expanded.headers[1].rect.top);
+        for index in (0..items.len()).step_by(2) {
+            assert!(layout.tiles[index].bottom <= header_y);
+        }
+        // 反向时从同一帧继续，完成后返回精确的终点布局。
+        fold.from = position;
+        fold.start = mid;
+        fold.to = 1.0;
+        assert_eq!(fold.openness(mid), position);
+        assert_eq!(fold.openness(mid + std::time::Duration::from_millis(220)), 1.0);
+        fold.frame(0.0, &mut layout);
+        assert_eq!(layout.tiles[0].right, 0);
+        let final_right = fold.expanded.tiles[0].right;
+        assert!(final_right > 0);
+        assert_eq!(fold.endpoint().tiles[0].right, final_right);
+    }
+
+    #[test]
+    fn search_keys_follow_names_across_clones_and_renames() {
+        let mut entry = item("重庆");
+        assert!(crate::search::rank(entry.search_keys(), "chongqing").is_some());
+        let copy = entry.clone();
+        assert!(std::ptr::eq(copy.search_keys(), entry.search_keys()));
+        entry.set_name("微信");
+        assert!(crate::search::rank(entry.search_keys(), "chongqing").is_none());
+        assert!(crate::search::rank(entry.search_keys(), "wx").is_some());
+        assert!(crate::search::rank(copy.search_keys(), "cq").is_some());
     }
 
     fn check(width: i32, height: i32, groups_n: usize, items_n: usize) {
@@ -4685,5 +5333,53 @@ mod layout_tests {
         let (tiles, cols, _) = search_grid(800, 100, 100, 60, 0);
         assert!(tiles.is_empty());
         assert_eq!(cols, 1);
+    }
+
+    #[test]
+    fn search_results_prefer_higher_usage_on_tied_score() {
+        // 匹配分同为 800 时，启动次数更多者排前；启动次数相同，最近使用时间更新者排前；
+        // 匹配分更高者（900）即使未使用过，依然排在低匹配分（800）之前。
+        let ordered = super::rank_search_candidates(vec![
+            (800, 1, 100, 0),
+            (800, 5, 50, 1),
+            (800, 5, 200, 2),
+            (900, 0, 0, 3),
+        ]);
+        assert_eq!(ordered, vec![3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn density_scales_tiles_monotonically() {
+        let (items, groups) = scene(20, 2);
+        let compact = super::compute_layout_scaled(
+            &items,
+            &groups,
+            2560,
+            1440,
+            120,
+            48.0,
+            crate::settings::IconDensity::Compact.scale_factor(),
+        );
+        let normal = super::compute_layout_scaled(
+            &items,
+            &groups,
+            2560,
+            1440,
+            120,
+            48.0,
+            crate::settings::IconDensity::Normal.scale_factor(),
+        );
+        let large = super::compute_layout_scaled(
+            &items,
+            &groups,
+            2560,
+            1440,
+            120,
+            48.0,
+            crate::settings::IconDensity::Large.scale_factor(),
+        );
+        assert!(compact.cell_w < normal.cell_w && normal.cell_w < large.cell_w);
+        assert!(compact.icon < normal.icon && normal.icon < large.icon);
+        assert!(large.tiles[0].right <= 2560);
     }
 }

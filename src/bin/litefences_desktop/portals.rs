@@ -61,8 +61,84 @@ pub struct FolderPortal {
     pub name: String,
     pub collapsed: bool,
     pub sort: SortMode,
+    /// 运行态下钻目录；`None` 表示位于入口根目录，不持久化。
+    pub current_dir: Option<PathBuf>,
 }
 
+fn is_strict_subpath(root: &std::path::Path, candidate: &std::path::Path) -> bool {
+    use std::path::Component;
+    let root_parts: Vec<String> = root
+        .components()
+        .filter_map(|c| match c {
+            Component::CurDir => None,
+            Component::ParentDir => Some("..".to_string()),
+            _ => Some(c.as_os_str().to_string_lossy().to_lowercase()),
+        })
+        .collect();
+    let cand_parts: Vec<String> = candidate
+        .components()
+        .filter_map(|c| match c {
+            Component::CurDir => None,
+            Component::ParentDir => Some("..".to_string()),
+            _ => Some(c.as_os_str().to_string_lossy().to_lowercase()),
+        })
+        .collect();
+    if root_parts.is_empty() || cand_parts.len() <= root_parts.len() {
+        return false;
+    }
+    if cand_parts.iter().any(|part| part == "..") {
+        return false;
+    }
+    cand_parts[..root_parts.len()] == root_parts[..]
+}
+
+impl FolderPortal {
+    pub fn active_dir(&self) -> &std::path::Path {
+        self.current_dir.as_deref().unwrap_or(self.dir.as_path())
+    }
+
+    pub fn is_drilled(&self) -> bool {
+        self.current_dir.is_some()
+    }
+
+    pub fn relative_subpath(&self) -> Option<String> {
+        let cur = self.current_dir.as_ref()?;
+        if let Ok(rel) = cur.strip_prefix(&self.dir) {
+            let text = rel.to_string_lossy().replace('\\', "/");
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+        cur.file_name()
+            .map(|name| name.to_string_lossy().to_string())
+    }
+
+    pub fn enter(&mut self, dir: PathBuf) -> bool {
+        if !is_strict_subpath(&self.dir, &dir) {
+            return false;
+        }
+        self.current_dir = Some(dir);
+        true
+    }
+
+    pub fn step_up(&mut self) -> bool {
+        let Some(cur) = self.current_dir.take() else {
+            return false;
+        };
+        if let Some(parent) = cur.parent()
+            && is_strict_subpath(&self.dir, parent)
+        {
+            self.current_dir = Some(parent.to_path_buf());
+        }
+        true
+    }
+
+    pub fn reset_root(&mut self) -> bool {
+        self.current_dir.take().is_some()
+    }
+}
+
+#[cfg(test)]
 pub fn restore(portals: &mut Vec<FolderPortal>, index: usize, previous: FolderPortal) {
     if let Some(current) = portals.iter_mut().find(|portal| crate::icons::same_path(&portal.dir, &previous.dir)) {
         *current = previous;
@@ -93,6 +169,7 @@ pub fn load() -> Vec<FolderPortal> {
                 name,
                 collapsed: entry.collapsed,
                 sort: SortMode::parse(&entry.sort).unwrap_or(SortMode::FolderFirst),
+                current_dir: None,
             })
         })
         .collect()
@@ -146,10 +223,11 @@ pub fn scan(portal: &FolderPortal) -> std::io::Result<Vec<DesktopItem>> {
     const HIDDEN: u32 = 0x2;
     const SYSTEM: u32 = 0x4;
     let mut entries: Vec<Entry> = Vec::new();
-    let read = match std::fs::read_dir(&portal.dir) {
+    let dir = portal.active_dir();
+    let read = match std::fs::read_dir(dir) {
         Ok(read) => read,
         Err(error) => {
-            log::warn(&format!("入口目录不可读 {}：{error}", portal.dir.display()));
+            log::warn(&format!("入口目录不可读 {}：{error}", dir.display()));
             return Err(error);
         }
     };
@@ -234,9 +312,9 @@ mod tests {
     #[test]
     fn undo_restores_removed_or_renamed_entry_in_place() {
         let original = FolderPortal { dir: PathBuf::from("D:/项目"), name: "项目".into(),
-            collapsed: true, sort: SortMode::Time };
+            collapsed: true, sort: SortMode::Time, current_dir: None };
         let mut portals = vec![FolderPortal { dir: PathBuf::from("D:/图片"), name: "图片".into(),
-            collapsed: false, sort: SortMode::Name }];
+            collapsed: false, sort: SortMode::Name, current_dir: None }];
         restore(&mut portals, 0, original.clone());
         portals[0].name = "临时名称".into();
         restore(&mut portals, 0, original.clone());
@@ -246,6 +324,30 @@ mod tests {
         assert_eq!(portals[0].sort, SortMode::Time);
         assert!(portals[0].collapsed);
         assert_eq!(portals[1].name, "图片");
+    }
+
+    #[test]
+    fn drill_down_and_step_up_tracks_subpath_within_root() {
+        let mut portal = FolderPortal {
+            dir: PathBuf::from(r"D:\项目"),
+            name: "项目".into(),
+            collapsed: false,
+            sort: SortMode::FolderFirst,
+            current_dir: None,
+        };
+        assert!(!portal.is_drilled());
+        assert!(!portal.enter(PathBuf::from(r"D:\其它目录")));
+        assert!(!portal.enter(PathBuf::from(r"D:\项目")));
+        assert!(portal.enter(PathBuf::from(r"D:\项目\文档\2026")));
+        assert!(portal.is_drilled());
+        assert_eq!(portal.active_dir(), std::path::Path::new(r"D:\项目\文档\2026"));
+        assert_eq!(portal.relative_subpath().as_deref(), Some("文档/2026"));
+        assert!(portal.step_up());
+        assert_eq!(portal.active_dir(), std::path::Path::new(r"D:\项目\文档"));
+        assert!(portal.step_up());
+        assert!(!portal.is_drilled());
+        assert_eq!(portal.active_dir(), std::path::Path::new(r"D:\项目"));
+        assert!(!portal.step_up());
     }
 
     #[test]

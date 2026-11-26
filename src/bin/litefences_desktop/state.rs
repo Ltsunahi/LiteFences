@@ -203,9 +203,20 @@ pub struct UndoSnapshot {
     pub selection: Vec<std::path::PathBuf>,
 }
 
+pub struct AvailabilityRefresh {
+    pub custom_updates: Vec<(std::path::PathBuf, DesktopItem)>,
+    pub portals: Option<(u64, Vec<(std::path::PathBuf, bool, Vec<DesktopItem>)>)>,
+}
+
 pub enum UndoStep {
     Panel(UndoSnapshot),
-    Portal { index: usize, previous: crate::portals::FolderPortal },
+    Order {
+        paths: Vec<std::path::PathBuf>,
+        selected: Option<std::path::PathBuf>,
+        selection: Vec<std::path::PathBuf>,
+        anchor: Option<std::path::PathBuf>,
+    },
+    Portals(Vec<crate::portals::FolderPortal>),
 }
 
 pub struct App {
@@ -240,8 +251,9 @@ pub struct App {
     pub selection: Vec<usize>,
     /// 连选起点。
     pub selection_anchor: Option<usize>,
-    /// 单步撤销快照（Ctrl+Z）。
-    pub undo: Option<UndoStep>,
+    /// 多步撤销/重做历史栈（Ctrl+Z / Ctrl+Y）。
+    pub undo_stack: Vec<UndoStep>,
+    pub redo_stack: Vec<UndoStep>,
     /// 拖动时暂时从静态帧里隐藏的项（让图标“浮起来”，避免重影）。
     pub drag_hidden: Option<usize>,
     /// 右键“待确认移除”的项与时间（面板内二次确认，不弹窗）。
@@ -272,6 +284,8 @@ pub struct App {
     pub search: String,
     /// 是否自动检查更新（可在托盘菜单关闭）。
     pub check_updates: bool,
+    /// 图标尺寸档位（紧凑 / 标准 / 偏大）。
+    pub density: crate::settings::IconDensity,
     /// 搜索栏是否展开。
     pub search_open: bool,
     /// 搜索栏展开/收起的动画起点。
@@ -299,10 +313,18 @@ pub struct App {
     pub desktop_stamp: Option<u64>,
     /// 面板的不透明磨砂底板（fx 模式不用）。
     pub backdrop: Option<crate::backdrop::Backdrop>,
+    /// 预乘图标+标签图集缓存（收起面板时释放）。
+    pub tile_cache: Option<crate::tile_cache::TileCache>,
     /// 后台图标扫描的结果通道。
     pub scan_rx: Option<std::sync::mpsc::Receiver<Vec<DesktopItem>>>,
     pub scan_pending: bool,
+    /// 后台自定义路径与入口目录可用性检查的结果通道。
+    pub refresh_rx: Option<std::sync::mpsc::Receiver<AvailabilityRefresh>>,
+    pub refresh_pending: bool,
+    /// 项目启动次数与最近使用时间（用于搜索排序加权）。
+    pub usage: std::collections::BTreeMap<String, crate::store::UsageEntry>,
     pub layout: Layout,
+    pub fold: Option<crate::overlay::GroupFold>,
     pub hover: Option<usize>,
     pub tray_installed: bool,
     /// 演示模式下还剩余的唤出次数。

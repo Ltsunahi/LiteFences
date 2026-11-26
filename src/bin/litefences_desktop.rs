@@ -70,6 +70,9 @@ mod settings;
 #[path = "litefences_desktop/theme.rs"]
 mod theme;
 #[cfg(windows)]
+#[path = "litefences_desktop/tile_cache.rs"]
+mod tile_cache;
+#[cfg(windows)]
 #[path = "litefences_desktop/state.rs"]
 mod state;
 #[cfg(windows)]

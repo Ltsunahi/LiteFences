@@ -63,6 +63,60 @@ fn key_name(key: u32) -> String {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum IconDensity {
+    Compact,
+    #[default]
+    Normal,
+    Large,
+}
+
+impl IconDensity {
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "compact" => Self::Compact,
+            "large" => Self::Large,
+            _ => Self::Normal,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Normal => "normal",
+            Self::Large => "large",
+        }
+    }
+
+    pub fn scale_factor(self) -> f32 {
+        match self {
+            Self::Compact => 0.85,
+            Self::Normal => 1.0,
+            Self::Large => 1.22,
+        }
+    }
+
+    pub fn all() -> [Self; 3] {
+        [Self::Compact, Self::Normal, Self::Large]
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Compact => 0,
+            Self::Normal => 1,
+            Self::Large => 2,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Compact => crate::i18n::t("紧凑", "Compact"),
+            Self::Normal => crate::i18n::t("标准", "Standard"),
+            Self::Large => crate::i18n::t("偏大", "Large"),
+        }
+    }
+}
+
 /// 全部设置。字段少，直接整份读整份写，避免改一项冲掉另一项。
 #[derive(Clone, Debug)]
 pub struct Settings {
@@ -72,6 +126,8 @@ pub struct Settings {
     pub lang: String,
     /// 是否自动检查更新。
     pub check_updates: bool,
+    /// 图标尺寸档位。
+    pub density: IconDensity,
 }
 
 impl Default for Settings {
@@ -81,6 +137,7 @@ impl Default for Settings {
             theme: "space".to_string(),
             lang: "auto".to_string(),
             check_updates: true,
+            density: IconDensity::Normal,
         }
     }
 }
@@ -102,6 +159,7 @@ pub fn load() -> Settings {
         settings.lang = section.lang;
     }
     settings.check_updates = section.check_updates;
+    settings.density = IconDensity::parse(&section.density);
     settings
 }
 
@@ -113,12 +171,31 @@ pub fn save(settings: &Settings) {
         theme: settings.theme.clone(),
         lang: settings.lang.clone(),
         check_updates: settings.check_updates,
+        density: settings.density.as_str().to_string(),
     };
     crate::store::save(&config);
     log::info(&format!(
-        "已保存设置：热键 {}，主题 {}，语言 {}",
+        "已保存设置：热键 {}，主题 {}，语言 {}，图标 {}",
         settings.hotkey.describe(),
         settings.theme,
-        settings.lang
+        settings.lang,
+        settings.density.as_str()
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn icon_density_parses_and_orders_scales() {
+        assert_eq!(IconDensity::parse("compact"), IconDensity::Compact);
+        assert_eq!(IconDensity::parse("LARGE"), IconDensity::Large);
+        assert_eq!(IconDensity::parse("unknown"), IconDensity::Normal);
+        assert!(IconDensity::Compact.scale_factor() < IconDensity::Normal.scale_factor());
+        assert!(IconDensity::Normal.scale_factor() < IconDensity::Large.scale_factor());
+        for d in IconDensity::all() {
+            assert_eq!(IconDensity::parse(d.as_str()), d);
+        }
+    }
 }

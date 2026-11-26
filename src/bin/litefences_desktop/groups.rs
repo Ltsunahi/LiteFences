@@ -11,6 +11,7 @@ pub struct Group {
     pub name: String,
     pub collapsed: bool,
     pub paths: Vec<PathBuf>,
+    pub rules: Vec<String>,
     /// 文件夹入口：值为 portals 里的序号；普通分组为 None。
     pub portal: Option<usize>,
 }
@@ -22,6 +23,7 @@ impl Group {
             name: name.into(),
             collapsed: false,
             paths: Vec::new(),
+            rules: Vec::new(),
             portal: None,
         }
     }
@@ -47,6 +49,7 @@ pub fn load() -> Vec<Group> {
             name: entry.name,
             collapsed: entry.collapsed,
             paths: entry.paths.into_iter().map(PathBuf::from).collect(),
+            rules: entry.rules,
             portal: None,
         })
         .collect()
@@ -66,6 +69,7 @@ pub fn save(groups: &[Group]) {
                 .iter()
                 .map(|path| path.to_string_lossy().to_string())
                 .collect(),
+            rules: group.rules.clone(),
         })
         .collect();
     crate::store::save(&config);
@@ -141,6 +145,81 @@ pub fn create(groups: &mut Vec<Group>, name: &str) -> Option<usize> {
     Some(groups.len() - 1)
 }
 
+/// 解析用户输入的归组规则：逗号/分号/空白分隔，扩展名（`.` 开头）统一小写，去重保序。
+pub fn parse_rules(text: &str) -> Vec<String> {
+    let mut rules = Vec::new();
+    let mut seen = Vec::new();
+    for part in text.split(|ch: char| ch == ',' || ch == '，' || ch == ';' || ch == '；' || ch.is_whitespace()) {
+        let trimmed = part.trim();
+        if trimmed.is_empty() || trimmed == "." {
+            continue;
+        }
+        let normalized = if let Some(ext) = trimmed.strip_prefix('.') {
+            format!(".{}", ext.to_ascii_lowercase())
+        } else {
+            trimmed.to_string()
+        };
+        let key = normalized.to_lowercase();
+        if !seen.contains(&key) {
+            seen.push(key);
+            rules.push(normalized);
+        }
+    }
+    rules
+}
+
+pub fn format_rules(rules: &[String]) -> String {
+    rules.join(", ")
+}
+
+pub fn rule_matches(rule: &str, path: &Path, name: &str) -> bool {
+    let rule = rule.trim();
+    if rule.is_empty() {
+        return false;
+    }
+    if let Some(ext_rule) = rule.strip_prefix('.') {
+        if ext_rule.is_empty() {
+            return false;
+        }
+        return path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(ext_rule));
+    }
+    let needle = rule.to_lowercase();
+    if name.to_lowercase().contains(&needle) {
+        return true;
+    }
+    path.file_name()
+        .and_then(|file| file.to_str())
+        .is_some_and(|file| file.to_lowercase().contains(&needle))
+}
+
+/// 按分组规则自动归类未归组项目；绝不覆盖已手动归入普通组或入口组的项目。
+/// `include_default` 为 true 时，「其它」组内的项也会重新参与规则整理。
+pub fn apply_rules(groups: &mut [Group], items: &[(PathBuf, String)], include_default: bool) -> usize {
+    let mut moved = 0usize;
+    for (path, name) in items {
+        let eligible = match group_of(groups, path) {
+            None => true,
+            Some(index) => include_default && groups[index].name == DEFAULT_GROUP,
+        };
+        if !eligible {
+            continue;
+        }
+        let target = groups.iter().position(|group| {
+            group.portal.is_none()
+                && group.name != DEFAULT_GROUP
+                && group.rules.iter().any(|rule| rule_matches(rule, path, name))
+        });
+        if let Some(index) = target {
+            assign(groups, path, Some(index));
+            moved += 1;
+        }
+    }
+    moved
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +232,43 @@ mod tests {
         known[0].paths.push(PathBuf::from(r"C:\x.lnk"));
         // 路径比较不区分大小写，和面板归组规则保持一致。
         assert_eq!(group_of_or_default(&known, Path::new(r"c:\X.LNK")), Some(0));
+    }
+
+    #[test]
+    fn parse_rules_splits_normalizes_and_deduplicates() {
+        let rules = parse_rules(".PDF, 会议； .pdf  设计稿\n.DOCX");
+        assert_eq!(rules, vec![".pdf", "会议", "设计稿", ".docx"]);
+    }
+
+    #[test]
+    fn apply_rules_assigns_ungrouped_without_overriding_manual_groups() {
+        let mut docs = Group::new("文档");
+        docs.rules = vec![".pdf".into(), "周报".into()];
+        let mut pinned = Group::new("常用");
+        pinned.paths.push(PathBuf::from(r"C:\Desktop\manual.pdf"));
+        let mut other = Group::new(DEFAULT_GROUP);
+        other.paths.push(PathBuf::from(r"C:\Desktop\old.pdf"));
+        let mut groups = vec![docs, pinned, other];
+
+        let items = vec![
+            (PathBuf::from(r"C:\Desktop\new.PDF"), "new".to_string()),
+            (PathBuf::from(r"C:\Desktop\manual.pdf"), "manual".to_string()),
+            (PathBuf::from(r"C:\Desktop\old.pdf"), "old".to_string()),
+            (PathBuf::from(r"C:\Desktop\note.txt"), "项目周报".to_string()),
+            (PathBuf::from(r"C:\Desktop\game.exe"), "game".to_string()),
+        ];
+
+        // 仅新项归组：保留已经在「其它」和「常用」的项。
+        assert_eq!(apply_rules(&mut groups, &items, false), 2);
+        assert_eq!(group_of(&groups, Path::new(r"C:\Desktop\new.PDF")), Some(0));
+        assert_eq!(group_of(&groups, Path::new(r"C:\Desktop\note.txt")), Some(0));
+        assert_eq!(group_of(&groups, Path::new(r"C:\Desktop\manual.pdf")), Some(1));
+        assert_eq!(group_of(&groups, Path::new(r"C:\Desktop\old.pdf")), Some(2));
+        assert_eq!(group_of(&groups, Path::new(r"C:\Desktop\game.exe")), None);
+
+        // include_default = true 时，「其它」组内的匹配项会按规则整理，但「常用」保持不动。
+        assert_eq!(apply_rules(&mut groups, &items, true), 1);
+        assert_eq!(group_of(&groups, Path::new(r"C:\Desktop\old.pdf")), Some(0));
+        assert_eq!(group_of(&groups, Path::new(r"C:\Desktop\manual.pdf")), Some(1));
     }
 }

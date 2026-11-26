@@ -39,9 +39,21 @@ pub struct Config {
     /// 首次使用引导是否已经看过。
     #[serde(default)]
     pub onboarded: bool,
+    /// 各项目启动频次与最近启动时间（用于搜索同分排序加权）。
+    #[serde(default)]
+    pub usage: std::collections::BTreeMap<String, UsageEntry>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UsageEntry {
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default)]
+    pub last_used: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(default)]
 pub struct SettingsSection {
     pub hotkey_modifiers: u32,
     pub hotkey_key: u32,
@@ -50,10 +62,17 @@ pub struct SettingsSection {
     /// 是否自动检查更新；旧配置没有这个字段时补 true。
     #[serde(default = "default_true")]
     pub check_updates: bool,
+    /// 图标尺寸档位：`compact` / `normal` / `large`。
+    #[serde(default = "default_density")]
+    pub density: String,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_density() -> String {
+    "normal".to_string()
 }
 
 impl Default for SettingsSection {
@@ -64,6 +83,7 @@ impl Default for SettingsSection {
             theme: "space".to_string(),
             lang: "auto".to_string(),
             check_updates: true,
+            density: default_density(),
         }
     }
 }
@@ -84,6 +104,9 @@ pub struct GroupEntry {
     pub collapsed: bool,
     #[serde(default)]
     pub paths: Vec<String>,
+    /// 自动归组规则：扩展名（如 `.pdf`）或名称关键字（如 `会议`）。
+    #[serde(default)]
+    pub rules: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -219,6 +242,46 @@ pub fn save(config: &Config) {
     }
 }
 
+pub fn usage_key(path: &std::path::Path) -> String {
+    path.to_string_lossy().to_lowercase()
+}
+
+pub fn save_usage(usage: &std::collections::BTreeMap<String, UsageEntry>) {
+    let mut config = load();
+    config.usage = usage.clone();
+    save(&config);
+}
+
+pub fn parse_import(bytes: &[u8]) -> Result<Config, String> {
+    let mut config = serde_json::from_slice::<Config>(bytes)
+        .map_err(|error| format!("JSON 格式无效：{error}"))?;
+    if config.version > CONFIG_VERSION {
+        return Err(format!("配置版本 {} 高于当前支持版本 {CONFIG_VERSION}", config.version));
+    }
+    config.version = CONFIG_VERSION;
+    Ok(config)
+}
+
+pub fn export_to(dest: &std::path::Path) -> Result<(), String> {
+    let mut config = load();
+    config.version = CONFIG_VERSION;
+    let text = serde_json::to_string_pretty(&config)
+        .map_err(|error| format!("序列化配置失败：{error}"))?;
+    if let Some(parent) = dest.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    replace_file(dest, text.as_bytes()).map_err(|error| format!("写入文件失败：{error}"))
+}
+
+pub fn import_from(src: &std::path::Path) -> Result<Config, String> {
+    let bytes = std::fs::read(src).map_err(|error| format!("读取文件失败：{error}"))?;
+    let config = parse_import(&bytes)?;
+    save(&config);
+    Ok(config)
+}
+
 /// 标记「引导已看过」，只改这一个字段，其它配置原样保留。
 pub fn set_onboarded(value: bool) {
     let mut config = load();
@@ -331,6 +394,7 @@ fn migrate_groups(dir: &std::path::Path) -> Vec<GroupEntry> {
                     name,
                     collapsed,
                     paths: Vec::new(),
+                    rules: Vec::new(),
                 });
             }
             continue;
@@ -405,6 +469,7 @@ mod tests {
             name: "开发".into(),
             collapsed: true,
             paths: vec!["C:\\dev\\a.txt".into()],
+            rules: Vec::new(),
         });
         config.items.push(ItemEntry {
             path: "C:\\dev\\a.txt".into(),
@@ -427,6 +492,92 @@ mod tests {
         assert_eq!(config.items[1].name, "Y");
         assert_eq!(config.settings.theme, "space");
         assert!(config.groups.is_empty());
+        assert!(config.usage.is_empty());
+    }
+
+    #[test]
+    fn usage_entries_round_trip() {
+        let mut config = Config {
+            version: CONFIG_VERSION,
+            ..Default::default()
+        };
+        config.usage.insert(
+            usage_key(std::path::Path::new("C:\\Dev\\App.lnk")),
+            UsageEntry {
+                count: 5,
+                last_used: 1_700_000_000,
+            },
+        );
+        let text = serde_json::to_string(&config).unwrap();
+        let back: Config = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            back.usage.get("c:\\dev\\app.lnk"),
+            Some(&UsageEntry {
+                count: 5,
+                last_used: 1_700_000_000
+            })
+        );
+    }
+
+    #[test]
+    fn parse_import_validates_version_and_json() {
+        assert!(parse_import(br#"{"version":1,"settings":{"density":"compact"}}"#).is_ok());
+        assert!(parse_import(br#"{broken"#).is_err());
+        assert!(parse_import(br#"{"version":99}"#).is_err());
+    }
+
+    #[test]
+    fn export_and_import_round_trip_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "litefences-export-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("exported.json");
+        let mut config = Config {
+            version: CONFIG_VERSION,
+            onboarded: true,
+            ..Default::default()
+        };
+        config.settings.density = "large".into();
+        config.groups.push(GroupEntry {
+            name: "工具".into(),
+            collapsed: true,
+            paths: vec!["C:\\Tools\\a.exe".into()],
+            rules: Vec::new(),
+        });
+        let text = serde_json::to_string_pretty(&config).unwrap();
+        std::fs::write(&file, &text).unwrap();
+        let imported = parse_import(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(imported.settings.density, "large");
+        assert!(imported.onboarded);
+        assert_eq!(imported.groups.len(), 1);
+        assert!(imported.groups[0].collapsed);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn group_rules_serialize_and_default_when_missing() {
+        let legacy = r#"{"version":1,"groups":[{"name":"文档","collapsed":false,"paths":[]}]}"#.as_bytes();
+        let parsed = parse_import(legacy).unwrap();
+        assert!(parsed.groups[0].rules.is_empty());
+
+        let mut cfg = Config {
+            version: CONFIG_VERSION,
+            ..Default::default()
+        };
+        cfg.groups.push(GroupEntry {
+            name: "文档".into(),
+            collapsed: false,
+            paths: vec![],
+            rules: vec![".pdf".into(), "报告".into()],
+        });
+        let back: Config = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(back.groups[0].rules, vec![".pdf", "报告"]);
     }
 
     #[test]

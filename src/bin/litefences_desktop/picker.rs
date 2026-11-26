@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::Controls::Dialogs::{
-    GetOpenFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST,
-    OPENFILENAMEW,
+    GetOpenFileNameW, GetSaveFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR,
+    OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
 
 use crate::log;
@@ -121,5 +121,44 @@ pub fn pick_icon_source(owner: HWND) -> Option<PathBuf> {
         owner,
         "程序与快捷方式\0*.exe;*.lnk;*.bat;*.cmd;*.url\0所有文件\0*.*\0\0",
         "选择要添加到面板的程序或文件",
+    )
+}
+
+pub fn pick_export_config(owner: HWND) -> Option<PathBuf> {
+    let mut buffer = [0u16; 1024];
+    let default_name = wide("litefences-config.json");
+    let count = default_name.len().min(buffer.len());
+    buffer[..count].copy_from_slice(&default_name[..count]);
+    let filter: Vec<u16> = "LiteFences 配置文件 (*.json)\0*.json\0所有文件\0*.*\0\0"
+        .encode_utf16()
+        .collect();
+    let title = wide(crate::i18n::t("导出配置", "Export settings"));
+    let def_ext = wide("json");
+    let mut dialog = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: owner,
+        lpstrFilter: filter.as_ptr(),
+        lpstrFile: buffer.as_mut_ptr(),
+        nMaxFile: buffer.len() as u32,
+        lpstrTitle: title.as_ptr(),
+        lpstrDefExt: def_ext.as_ptr(),
+        Flags: OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST,
+        ..Default::default()
+    };
+    // SAFETY: 结构体各字段指向本次调用期间有效的缓冲区。
+    let ok = unsafe { GetSaveFileNameW(&mut dialog) } != 0;
+    if !ok {
+        log::info("已取消导出配置");
+        return None;
+    }
+    let end = buffer.iter().position(|&ch| ch == 0).unwrap_or(buffer.len());
+    (end > 0).then(|| PathBuf::from(String::from_utf16_lossy(&buffer[..end])))
+}
+
+pub fn pick_import_config(owner: HWND) -> Option<PathBuf> {
+    pick_with(
+        owner,
+        "LiteFences 配置文件 (*.json)\0*.json\0所有文件\0*.*\0\0",
+        crate::i18n::t("导入配置", "Import settings"),
     )
 }

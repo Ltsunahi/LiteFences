@@ -24,8 +24,12 @@ pub const MENU_HOTKEY: usize = 1006;
 pub const MENU_ADD_PORTAL: usize = 1007;
 pub const MENU_CHECK_UPDATE: usize = 1008;
 pub const MENU_AUTO_UPDATE: usize = 1009;
+pub const MENU_EXPORT_CONFIG: usize = 1010;
+pub const MENU_IMPORT_CONFIG: usize = 1011;
 /// 主题菜单项的起始编号：`MENU_THEME_BASE + 主题序号`。
 pub const MENU_THEME_BASE: usize = 1100;
+/// 图标大小档位：`MENU_DENSITY_BASE + 档位序号`。
+pub const MENU_DENSITY_BASE: usize = 1200;
 /// 语言菜单项：跟随系统 / 中文 / English。
 pub const MENU_LANG_BASE: usize = 1300;
 /// 用户点击托盘气泡时 `lparam` 低 16 位里的通知码。
@@ -126,6 +130,7 @@ pub fn show_menu(
     autostart_on: bool,
     hotkey_text: &str,
     theme_key: &str,
+    density: crate::settings::IconDensity,
     lang_setting: &str,
     check_updates: bool,
 ) -> usize {
@@ -163,6 +168,10 @@ pub fn show_menu(
             "Add folder entry… (read-only view)",
         ));
         AppendMenuW(menu, MF_STRING, MENU_ADD_PORTAL, add_portal.as_ptr());
+        let export_cfg = wide(crate::i18n::t("导出配置…", "Export settings…"));
+        let import_cfg = wide(crate::i18n::t("导入配置…", "Import settings…"));
+        AppendMenuW(menu, MF_STRING, MENU_EXPORT_CONFIG, export_cfg.as_ptr());
+        AppendMenuW(menu, MF_STRING, MENU_IMPORT_CONFIG, import_cfg.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         let check = wide(crate::i18n::t("检查更新…", "Check for updates…"));
         let auto_update = wide(if check_updates {
@@ -191,6 +200,27 @@ pub fn show_menu(
                 MF_STRING
             };
             AppendMenuW(menu, flags, MENU_THEME_BASE + index, label.as_ptr());
+        }
+        // 图标大小：紧凑 / 标准 / 偏大。
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+        let density_labels: Vec<_> = crate::settings::IconDensity::all()
+            .iter()
+            .map(|mode| {
+                wide(&format!(
+                    "{} {}",
+                    crate::i18n::t("图标大小：", "Icon size:"),
+                    mode.label()
+                ))
+            })
+            .collect();
+        let current_density = density.index();
+        for (index, label) in density_labels.iter().enumerate() {
+            let flags = if index == current_density {
+                MF_STRING | MF_CHECKED
+            } else {
+                MF_STRING
+            };
+            AppendMenuW(menu, flags, MENU_DENSITY_BASE + index, label.as_ptr());
         }
         // 语言：跟随系统 / 中文 / English，当前项打勾。
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());

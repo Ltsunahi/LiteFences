@@ -229,72 +229,121 @@ fn pinyin_key(text: &str) -> String {
     key
 }
 
-/// 匹配得分：分数越高越靠前；None 表示不匹配。
-///
-/// 顺序：名字完全匹配 > 名字前缀 > 名字子串 > 紧凑 > 全拼 > 拼音声母 > 缩写。
-pub fn score(name: &str, query: &str) -> Option<u32> {
-    let query = query.trim().to_lowercase();
+/// 一个显示名对应一份搜索键；重命名时失效。
+#[derive(Debug)]
+pub struct SearchKeys {
+    lower: String,
+    compact: String,
+    full: Vec<String>,
+    pinyin: String,
+    acronyms: Vec<String>,
+}
+
+impl SearchKeys {
+    pub fn new(name: &str) -> Self {
+        Self {
+            lower: name.to_lowercase(),
+            compact: compact(name),
+            full: full_pinyin_keys(name),
+            pinyin: pinyin_key(name),
+            acronyms: acronym_keys(name),
+        }
+    }
+}
+
+/// query 已由调用方统一去空白并转小写。
+pub fn rank(keys: &SearchKeys, query: &str) -> Option<u32> {
     if query.is_empty() {
         return Some(0);
     }
-    let lower = name.to_lowercase();
+    let lower = &keys.lower;
     if lower == query {
         return Some(1000);
     }
-    if lower.starts_with(&query) {
+    if lower.starts_with(query) {
         return Some(900);
     }
-    if lower.contains(&query) {
+    if lower.contains(query) {
         return Some(800);
     }
     // 下面的匹配只对 ASCII 关键字有意义，中文关键字走上面的原文子串。
     if !query.chars().all(|ch| ch.is_ascii_alphanumeric()) {
         return None;
     }
-    let compact = compact(name);
+    let compact = &keys.compact;
     if compact == query {
         return Some(780);
     }
-    if compact.starts_with(&query) {
+    if compact.starts_with(query) {
         return Some(760);
     }
-    let full = full_pinyin_keys(name);
-    if full.iter().any(|key| key == &query) {
+    let full = &keys.full;
+    if full.iter().any(|key| key == query) {
         return Some(745);
     }
-    if full.iter().any(|key| key.starts_with(&query)) {
+    if full.iter().any(|key| key.starts_with(query)) {
         return Some(730);
     }
-    let pinyin = pinyin_key(name);
+    let pinyin = &keys.pinyin;
     if pinyin == query {
         return Some(720);
     }
-    if pinyin.starts_with(&query) {
+    if pinyin.starts_with(query) {
         return Some(700);
     }
-    if full.iter().any(|key| key.contains(&query)) {
+    if full.iter().any(|key| key.contains(query)) {
         return Some(680);
     }
-    if pinyin.contains(&query) {
+    if pinyin.contains(query) {
         return Some(640);
     }
-    let acronyms = acronym_keys(name);
-    if acronyms.iter().any(|key| key == &query) {
+    let acronyms = &keys.acronyms;
+    if acronyms.iter().any(|key| key == query) {
         return Some(600);
     }
-    if acronyms.iter().any(|key| key.starts_with(&query)) {
+    if acronyms.iter().any(|key| key.starts_with(query)) {
         return Some(585);
     }
-    if compact.contains(&query) {
+    if compact.contains(query) {
         return Some(540);
     }
-    if acronyms.iter().any(|key| key.contains(&query)) {
+    if acronyms.iter().any(|key| key.contains(query)) {
         return Some(480);
     }
     None
 }
 
-/// 关键字是否命中某个名字。
+/// 按文件扩展名筛选：支持 `.pdf` / `.exe` / `pdf` 等（仅当用户输入以 `.` 开头时触发，避免干扰普通名称搜索）。
+pub fn match_extension(path: &std::path::Path, query: &str) -> Option<u32> {
+    let ext_query = query.strip_prefix('.')?;
+    if ext_query.is_empty() || !ext_query.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if ext == ext_query {
+        Some(950)
+    } else if ext.starts_with(ext_query) {
+        Some(820)
+    } else {
+        None
+    }
+}
+
+/// 分组名称兜底得分：把分组名当作搜索键匹配（含拼音/首字母），上限 480，确保排在直接名称匹配之下。
+pub fn group_fallback_score(group_name: &str, query: &str) -> Option<u32> {
+    if query.is_empty() || query.starts_with('.') {
+        return None;
+    }
+    let score = rank(&SearchKeys::new(group_name), query)?;
+    Some((score / 2).clamp(200, 480))
+}
+
+#[cfg(test)]
+fn score(name: &str, query: &str) -> Option<u32> {
+    rank(&SearchKeys::new(name), &query.trim().to_lowercase())
+}
+
+#[cfg(test)]
 pub fn matches(name: &str, query: &str) -> bool {
     score(name, query).is_some()
 }
@@ -344,5 +393,24 @@ mod tests {
         assert!(matches("银行", "yinxing"));
         assert!(matches("音乐", "yinyue"));
         assert!(!matches("百度网盘", "weixin"));
+    }
+
+    #[test]
+    fn matches_file_extension_queries() {
+        let pdf = std::path::Path::new("C:\\Docs\\report.PDF");
+        assert_eq!(match_extension(pdf, ".pdf"), Some(950));
+        assert_eq!(match_extension(pdf, ".pd"), Some(820));
+        assert_eq!(match_extension(pdf, ".exe"), None);
+        assert_eq!(match_extension(pdf, "."), None);
+        assert_eq!(match_extension(pdf, "pdf"), None);
+    }
+
+    #[test]
+    fn group_fallback_stays_below_direct_name_match() {
+        let group_hit = group_fallback_score("开发工具", "kf").unwrap();
+        assert!((200..=480).contains(&group_hit));
+        let direct_hit = score("微信", "wx").unwrap();
+        assert!(direct_hit > group_hit);
+        assert_eq!(group_fallback_score("开发工具", ".exe"), None);
     }
 }

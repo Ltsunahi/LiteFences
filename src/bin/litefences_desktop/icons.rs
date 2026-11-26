@@ -42,6 +42,7 @@ pub enum ItemSource {
 
 #[derive(Clone)]
 pub struct DesktopItem {
+    pub search_keys: OnceLock<std::sync::Arc<crate::search::SearchKeys>>,
     pub offline: bool,
     pub path: PathBuf,
     pub name: String,
@@ -49,6 +50,19 @@ pub struct DesktopItem {
     pub source: ItemSource,
     /// 用户指定的图标文件（.ico），为空表示用系统默认图标。
     pub custom_icon: Option<PathBuf>,
+}
+
+impl DesktopItem {
+    pub fn search_keys(&self) -> &crate::search::SearchKeys {
+        self.search_keys.get_or_init(|| std::sync::Arc::new(crate::search::SearchKeys::new(&self.name)))
+    }
+
+    pub fn set_name(&mut self, name: &str) {
+        if self.name != name {
+            self.name = name.to_owned();
+            self.search_keys.take();
+        }
+    }
 }
 
 // SAFETY: 图标句柄属于进程范围，不绑定创建线程；所有权在后台线程创建、UI 线程使用与释放。
@@ -157,6 +171,7 @@ pub fn collect_items(hidden: &[PathBuf]) -> Result<Vec<DesktopItem>, String> {
             log::warn(&format!("取图标耗时 {elapsed}ms：{}", path.display()));
         }
         items.push(DesktopItem {
+            search_keys: OnceLock::new(),
             offline: false,
             path,
             name,
@@ -397,11 +412,17 @@ fn to_string(buffer: &[u16]) -> String {
     String::from_utf16_lossy(&buffer[..end])
 }
 
-fn shell_execute(file: &str, parameters: &str, directory: &str, original: &Path) -> Result<(), String> {
+fn shell_execute_with_verb(
+    verb: &str,
+    file: &str,
+    parameters: &str,
+    directory: &str,
+    original: &Path,
+) -> Result<(), String> {
     let file = wide(file);
     let parameters = wide(parameters);
     let directory = wide(directory);
-    let operation = wide("open");
+    let operation = wide(verb);
     let (params_ptr, dir_ptr) = if parameters.len() > 1 { (parameters.as_ptr(), directory.as_ptr()) } else { (std::ptr::null(), std::ptr::null()) };
     // SAFETY: 字符串均以 0 结尾，句柄为空表示不指定父窗口。
     let result = unsafe {
@@ -415,7 +436,7 @@ fn shell_execute(file: &str, parameters: &str, directory: &str, original: &Path)
         )
     };
     let code = result as isize;
-    log::info(&format!("ShellExecute 返回 {code}：{}", original.display()));
+    log::info(&format!("ShellExecute({verb}) 返回 {code}：{}", original.display()));
     if code > 32 {
         log::info(&format!("启动 {}", original.display()));
         Ok(())
@@ -447,6 +468,7 @@ pub fn make_custom_item(path: PathBuf) -> DesktopItem {
     let offline = !path.exists();
     let icon = if offline { std::ptr::null_mut() } else { load_icon_indexed(&path, system_image_list()).0 };
     DesktopItem {
+        search_keys: OnceLock::new(),
         offline,
         path,
         name,
@@ -619,7 +641,7 @@ pub fn apply_order(items: &mut [DesktopItem], entries: &[(PathBuf, String)]) {
         if let Some((_, name)) = entries.iter().find(|(path, _)| same_path(path, &item.path))
             && !name.is_empty()
         {
-            item.name = name.clone();
+            item.set_name(name);
         }
     }
     let rank = |path: &Path| {
@@ -648,7 +670,7 @@ pub fn apply_order_entries(
             continue;
         };
         if !name.is_empty() {
-            item.name = name.clone();
+            item.set_name(name);
         }
         let Some(icon_path) = icon else {
             continue;
@@ -684,13 +706,23 @@ pub fn apply_order_entries(
 
 /// 用系统关联程序打开；快捷方式先解析再启动目标。
 pub fn launch(path: &Path) -> Result<(), String> {
+    launch_with_verb("open", path)
+}
+
+/// 以管理员身份运行（UAC 提权）。
+pub fn launch_as_admin(path: &Path) -> Result<(), String> {
+    launch_with_verb("runas", path)
+}
+
+fn launch_with_verb(verb: &str, path: &Path) -> Result<(), String> {
     if path
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))
     {
         if let Some(shortcut) = resolve_shortcut(path) {
             log::info(&format!("快捷方式目标：{}", shortcut.target));
-            return shell_execute(
+            return shell_execute_with_verb(
+                verb,
                 &shortcut.target,
                 &shortcut.arguments,
                 &shortcut.directory,
@@ -699,7 +731,7 @@ pub fn launch(path: &Path) -> Result<(), String> {
         }
         log::warn(&format!("快捷方式未能解析，退回直接打开：{}", path.display()));
     }
-    shell_execute(&path.to_string_lossy(), "", "", path)
+    shell_execute_with_verb(verb, &path.to_string_lossy(), "", "", path)
 }
 
 fn os_wide(path: &Path) -> Vec<u16> {
