@@ -42,6 +42,7 @@ pub enum ItemSource {
 
 #[derive(Clone)]
 pub struct DesktopItem {
+    pub offline: bool,
     pub path: PathBuf,
     pub name: String,
     pub icon: HICON,
@@ -156,6 +157,7 @@ pub fn collect_items(hidden: &[PathBuf]) -> Result<Vec<DesktopItem>, String> {
             log::warn(&format!("取图标耗时 {elapsed}ms：{}", path.display()));
         }
         items.push(DesktopItem {
+            offline: false,
             path,
             name,
             icon,
@@ -442,8 +444,10 @@ pub fn make_custom_item(path: PathBuf) -> DesktopItem {
         .unwrap_or_else(|| crate::i18n::t("未命名", "Untitled"))
         .to_string();
     let name = display_name(&file_name);
-    let icon = load_icon_indexed(&path, system_image_list()).0;
+    let offline = !path.exists();
+    let icon = if offline { std::ptr::null_mut() } else { load_icon_indexed(&path, system_image_list()).0 };
     DesktopItem {
+        offline,
         path,
         name,
         icon,
@@ -458,7 +462,7 @@ pub fn load_custom() -> Vec<PathBuf> {
         .custom
         .into_iter()
         .map(PathBuf::from)
-        .filter(|path| path.exists())
+        .filter(|path| !path.as_os_str().is_empty())
         .collect()
 }
 
@@ -548,13 +552,13 @@ pub fn apply_custom_icons(items: &mut [DesktopItem]) {
         else {
             continue;
         };
+        item.custom_icon = Some(icon_path.clone());
         if let Some(icon) = load_icon_file(icon_path) {
             if !item.icon.is_null() {
                 // SAFETY: 图标句柄由本模块创建。
                 unsafe { DestroyIcon(item.icon) };
             }
             item.icon = icon;
-            item.custom_icon = Some(icon_path.clone());
         }
     }
 }
@@ -656,13 +660,13 @@ pub fn apply_order_entries(
         {
             continue;
         }
+        item.custom_icon = Some(icon_path.clone());
         if let Some(loaded) = load_icon_file(icon_path) {
             if !item.icon.is_null() {
                 // SAFETY: 图标句柄由本模块创建，替换前释放一次。
                 unsafe { DestroyIcon(item.icon) };
             }
             item.icon = loaded;
-            item.custom_icon = Some(icon_path.clone());
         }
     }
     let rank = |path: &Path| {

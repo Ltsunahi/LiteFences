@@ -199,8 +199,13 @@ pub struct UndoSnapshot {
     pub hidden: Vec<std::path::PathBuf>,
     /// 非入口项：(路径, 显示名, 自定义图标)。
     pub items: Vec<(std::path::PathBuf, String, Option<std::path::PathBuf>)>,
-    pub selected: Option<usize>,
-    pub selection: Vec<usize>,
+    pub selected: Option<std::path::PathBuf>,
+    pub selection: Vec<std::path::PathBuf>,
+}
+
+pub enum UndoStep {
+    Panel(UndoSnapshot),
+    Portal { index: usize, previous: crate::portals::FolderPortal },
 }
 
 pub struct App {
@@ -236,7 +241,7 @@ pub struct App {
     /// 连选起点。
     pub selection_anchor: Option<usize>,
     /// 单步撤销快照（Ctrl+Z）。
-    pub undo: Option<UndoSnapshot>,
+    pub undo: Option<UndoStep>,
     /// 拖动时暂时从静态帧里隐藏的项（让图标“浮起来”，避免重影）。
     pub drag_hidden: Option<usize>,
     /// 右键“待确认移除”的项与时间（面板内二次确认，不弹窗）。
@@ -272,7 +277,8 @@ pub struct App {
     /// 搜索栏展开/收起的动画起点。
     pub search_anim: Option<Instant>,
     /// 正在接收键盘输入（面板临时激活）。
-    pub search_typing: bool,
+    pub search_edit: HWND,
+    pub ime_composing: bool,
     /// 缓存的界面字体（按缩放创建一次，收起面板时释放）。
     pub font: windows_sys::Win32::Graphics::Gdi::HFONT,
     pub font_scale: f32,

@@ -106,7 +106,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     if code >= 0 && wparam as u32 == WM_KEYDOWN {
         // SAFETY: 低层键盘钩子的 lparam 指向有效 KBDLLHOOKSTRUCT。
         let event = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
-        if state().shown {
+        if state().shown && state().search_edit.is_null() {
             let vk = event.vkCode;
             if vk == u32::from(VK_ESCAPE) {
                 log::info("Esc：退出移除模式或收起面板");
@@ -118,7 +118,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 // Ctrl+Z：撤销最近一步（拖动落错组、误移除、改名等）。
                 // SAFETY: 只读取按键状态。
                 let ctrl_held = unsafe { GetKeyState(i32::from(VK_CONTROL)) < 0 };
-                if ctrl_held && vk == 0x5A && !state().search_typing {
+                if ctrl_held && vk == 0x5A {
                     overlay::undo_last();
                     return 1;
                 }
@@ -127,7 +127,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                     return 1;
                 }
                 // 唤出后直接打字：不抢焦点，字母/数字直接进搜索框。
-                if !state().search_typing {
+                {
                     // SAFETY: 只读取按键状态。
                     let (ctrl, alt, win) = unsafe {
                         (

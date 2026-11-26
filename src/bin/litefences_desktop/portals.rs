@@ -55,11 +55,20 @@ impl SortMode {
     }
 }
 
+#[derive(Clone)]
 pub struct FolderPortal {
     pub dir: PathBuf,
     pub name: String,
     pub collapsed: bool,
     pub sort: SortMode,
+}
+
+pub fn restore(portals: &mut Vec<FolderPortal>, index: usize, previous: FolderPortal) {
+    if let Some(current) = portals.iter_mut().find(|portal| crate::icons::same_path(&portal.dir, &previous.dir)) {
+        *current = previous;
+    } else {
+        portals.insert(index.min(portals.len()), previous);
+    }
 }
 
 pub fn load() -> Vec<FolderPortal> {
@@ -68,8 +77,7 @@ pub fn load() -> Vec<FolderPortal> {
         .into_iter()
         .filter_map(|entry| {
             let dir_path = PathBuf::from(&entry.dir);
-            if !dir_path.is_dir() {
-                log::warn(&format!("入口目录不存在，跳过：{}", entry.dir));
+            if dir_path.as_os_str().is_empty() {
                 return None;
             }
             let name = if entry.name.trim().is_empty() {
@@ -133,7 +141,7 @@ fn sort_entries(entries: &mut [Entry], mode: SortMode) {
 }
 
 /// 读目录的一层内容并生成面板项（图标句柄由调用方负责销毁）。
-pub fn scan(portal: &FolderPortal) -> Vec<DesktopItem> {
+pub fn scan(portal: &FolderPortal) -> std::io::Result<Vec<DesktopItem>> {
     use std::os::windows::fs::MetadataExt;
     const HIDDEN: u32 = 0x2;
     const SYSTEM: u32 = 0x4;
@@ -142,7 +150,7 @@ pub fn scan(portal: &FolderPortal) -> Vec<DesktopItem> {
         Ok(read) => read,
         Err(error) => {
             log::warn(&format!("入口目录不可读 {}：{error}", portal.dir.display()));
-            return Vec::new();
+            return Err(error);
         }
     };
     for entry in read.flatten() {
@@ -177,14 +185,14 @@ pub fn scan(portal: &FolderPortal) -> Vec<DesktopItem> {
         }
     }
     sort_entries(&mut entries, portal.sort);
-    entries
+    Ok(entries
         .into_iter()
         .map(|entry| {
             let mut item = crate::icons::make_custom_item(entry.path);
             item.source = ItemSource::Portal;
             item
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -221,6 +229,23 @@ mod tests {
         let mut entries = scene();
         sort_entries(&mut entries, SortMode::FolderFirst);
         assert_eq!(names(&entries), ["A文件夹", "Z文件夹", "a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn undo_restores_removed_or_renamed_entry_in_place() {
+        let original = FolderPortal { dir: PathBuf::from("D:/项目"), name: "项目".into(),
+            collapsed: true, sort: SortMode::Time };
+        let mut portals = vec![FolderPortal { dir: PathBuf::from("D:/图片"), name: "图片".into(),
+            collapsed: false, sort: SortMode::Name }];
+        restore(&mut portals, 0, original.clone());
+        portals[0].name = "临时名称".into();
+        restore(&mut portals, 0, original.clone());
+        assert_eq!(portals.len(), 2);
+        assert_eq!(portals[0].dir, original.dir);
+        assert_eq!(portals[0].name, original.name);
+        assert_eq!(portals[0].sort, SortMode::Time);
+        assert!(portals[0].collapsed);
+        assert_eq!(portals[1].name, "图片");
     }
 
     #[test]

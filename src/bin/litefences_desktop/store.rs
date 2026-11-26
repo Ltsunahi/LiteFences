@@ -7,6 +7,7 @@
 //! - 旧版的分号分隔 txt 只在首次启动时读一次，读完改名成 `*.migrated.txt`。
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -105,14 +106,48 @@ pub fn config_path() -> PathBuf {
     base_dir().join("config.json")
 }
 
-fn backup_path() -> PathBuf {
-    base_dir().join("config.json.bak")
+static RECOVERY_NOTICE: AtomicBool = AtomicBool::new(false);
+
+pub fn take_recovery_notice() -> bool {
+    RECOVERY_NOTICE.swap(false, Ordering::Relaxed)
+}
+
+fn recover_backup(path: &std::path::Path) -> Option<Config> {
+    let bytes = std::fs::read(path.with_extension("json.bak")).ok()?;
+    let mut config = serde_json::from_slice::<Config>(&bytes).ok()?;
+    if config.version > CONFIG_VERSION { return None; }
+    if path.exists() {
+        let broken = path.with_extension("broken.json");
+        if let Err(error) = std::fs::copy(path, broken) {
+            log::warn(&format!("保留损坏配置失败：{error}"));
+        }
+    }
+    if let Err(error) = replace_file(path, &bytes) {
+        log::warn(&format!("已载入备份，但写回配置失败：{error}"));
+    }
+    config.version = CONFIG_VERSION;
+    RECOVERY_NOTICE.store(true, Ordering::Relaxed);
+    log::info("已从备份恢复配置");
+    Some(config)
+}
+
+fn replace_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(".tmp");
+    let temp = PathBuf::from(temp);
+    std::fs::write(&temp, bytes)?;
+    if let Err(error) = std::fs::rename(&temp, path) {
+        let _ = std::fs::remove_file(temp);
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// 读配置。文件不存在就走迁移；文件坏了就备份坏文件、退回默认值（不能让面板打不开）。
 pub fn load() -> Config {
     let path = config_path();
     if !path.exists() {
+        if let Some(config) = recover_backup(&path) { return config; }
         let mut config = migrate_legacy();
         config.version = CONFIG_VERSION;
         if has_any_data(&config) {
@@ -122,17 +157,18 @@ pub fn load() -> Config {
         }
         return config;
     }
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
         Err(error) => {
             log::error(&format!("读取 config.json 失败：{error}"));
+            if let Some(config) = recover_backup(&path) { return config; }
             return Config {
                 version: CONFIG_VERSION,
                 ..Default::default()
             };
         }
     };
-    match serde_json::from_str::<Config>(&text) {
+    match serde_json::from_slice::<Config>(&bytes) {
         Ok(mut config) => {
             if config.version == 0 {
                 config.version = CONFIG_VERSION;
@@ -140,6 +176,7 @@ pub fn load() -> Config {
             config
         }
         Err(error) => {
+            if let Some(config) = recover_backup(&path) { return config; }
             let broken = base_dir().join("config.broken.json");
             let _ = std::fs::rename(&path, &broken);
             log::error(&format!(
@@ -169,17 +206,16 @@ pub fn save(config: &Config) {
             return;
         }
     };
-    let temp = path.with_extension("json.tmp");
-    if let Err(error) = std::fs::write(&temp, text) {
-        log::error(&format!("写入配置失败：{error}"));
-        return;
+    if let Ok(previous) = std::fs::read(&path) {
+        if previous == text.as_bytes() { return; }
+        if serde_json::from_slice::<Config>(&previous).is_ok()
+            && let Err(error) = replace_file(&path.with_extension("json.bak"), &previous)
+        {
+            log::warn(&format!("轮换配置备份失败：{error}"));
+        }
     }
-    if path.exists() {
-        let _ = std::fs::copy(&path, backup_path());
-    }
-    if let Err(error) = std::fs::rename(&temp, &path) {
+    if let Err(error) = replace_file(&path, text.as_bytes()) {
         log::error(&format!("替换 config.json 失败：{error}"));
-        let _ = std::fs::remove_file(&temp);
     }
 }
 
@@ -391,5 +427,25 @@ mod tests {
         assert_eq!(config.items[1].name, "Y");
         assert_eq!(config.settings.theme, "space");
         assert!(config.groups.is_empty());
+    }
+
+    #[test]
+    fn recovery_validates_backup_and_preserves_damaged_bytes() {
+        let dir = std::env::temp_dir().join(format!("litefences-recovery-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&dir).unwrap();
+        let main = dir.join("config.json");
+        let backup = dir.join("config.json.bak");
+        std::fs::write(&main, [0xff]).unwrap();
+        std::fs::write(&backup, "{").unwrap();
+        assert!(recover_backup(&main).is_none());
+        assert_eq!(std::fs::read(&main).unwrap(), [0xff]);
+        let valid = br#"{"version":1,"custom":["offline.txt"]}"#;
+        std::fs::write(&backup, valid).unwrap();
+        assert_eq!(recover_backup(&main).unwrap().custom, ["offline.txt"]);
+        assert_eq!(std::fs::read(dir.join("config.broken.json")).unwrap(), [0xff]);
+        assert_eq!(std::fs::read(&main).unwrap(), valid);
+        assert_eq!(std::fs::read(&backup).unwrap(), valid);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

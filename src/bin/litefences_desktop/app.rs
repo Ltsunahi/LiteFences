@@ -45,6 +45,7 @@ const TIMER_CAPTURE: usize = 5;
 const TIMER_CAPTURE_EARLY: usize = 6;
 /// 资源管理器重启后补做一次「隐藏桌面图标」。
 const TIMER_REHIDE: usize = 7;
+const TIMER_DEVICE_CHANGE: usize = 8;
 /// 后台图标扫描完成的自定义消息。
 const WM_APP_SCAN: u32 = WM_APP + 2;
 /// 托盘不可用时的兜底入口，也方便键盘用户。
@@ -199,7 +200,8 @@ pub fn run() -> std::process::ExitCode {
         check_updates: initial_settings.check_updates,
         search_open: false,
         search_anim: None,
-        search_typing: false,
+        search_edit: std::ptr::null_mut(),
+        ime_composing: false,
         font: std::ptr::null_mut(),
         font_scale: 0.0,
         groups: crate::groups::load(),
@@ -224,7 +226,8 @@ pub fn run() -> std::process::ExitCode {
         keyboard_hook: 0,
     });
     // 保证至少有一个“其它”组，并把分组文件落盘一次。
-    crate::groups::prune(&mut state().groups);
+    let app = state();
+    crate::groups::prune(&mut app.groups, &app.custom);
     crate::groups::ensure_default(&mut state().groups);
     crate::groups::save(&state().groups);
     rebuild_portal_items();
@@ -392,13 +395,16 @@ pub fn rebuild_portal_items() {
     }
     app.groups.retain(|group| group.portal.is_none());
     for (index, portal) in app.portals.iter().enumerate() {
-        let items = crate::portals::scan(portal);
+        let contents = crate::portals::scan(portal);
+        let offline = contents.is_err();
+        let items = contents.unwrap_or_default();
         let mut group = crate::groups::Group::new(if crate::i18n::is_en() {
         format!("Entry: {}", portal.name)
     } else {
         format!("入口：{}", portal.name)
     });
         group.collapsed = portal.collapsed;
+        group.offline = offline;
         group.portal = Some(index);
         group.paths = items.iter().map(|item| item.path.clone()).collect();
         app.groups.push(group);
@@ -522,6 +528,25 @@ fn append_custom_items() {
             continue;
         }
         app.items.push(icons::make_custom_item(path));
+    }
+}
+
+pub fn refresh_custom_availability() {
+    for item in &mut state().items {
+        if item.source != icons::ItemSource::Custom {
+            continue;
+        }
+        let offline = !item.path.exists();
+        if offline == item.offline {
+            continue;
+        }
+        let mut refreshed = icons::make_custom_item(item.path.clone());
+        refreshed.name.clone_from(&item.name);
+        refreshed.custom_icon.clone_from(&item.custom_icon);
+        if let Some(path) = &item.custom_icon {
+            icons::set_custom_icon(&mut refreshed, path);
+        }
+        icons::destroy_item(std::mem::replace(item, refreshed));
     }
 }
 
@@ -739,7 +764,7 @@ pub fn rename_item(index: usize, name: &str) {
 /// 记录改动前的面板状态，供 Ctrl+Z 单步撤销。只保留最近一步。
 pub fn remember_undo(label: &'static str) {
     let app = state();
-    app.undo = Some(crate::state::UndoSnapshot {
+    app.undo = Some(crate::state::UndoStep::Panel(crate::state::UndoSnapshot {
         label,
         groups: app
             .groups
@@ -755,17 +780,42 @@ pub fn remember_undo(label: &'static str) {
             .filter(|item| item.source != icons::ItemSource::Portal)
             .map(|item| (item.path.clone(), item.name.clone(), item.custom_icon.clone()))
             .collect(),
-        selected: app.selected,
-        selection: app.selection.clone(),
-    });
+        selected: app.selected.and_then(|index| app.items.get(index)).map(|item| item.path.clone()),
+        selection: app.selection.iter().filter_map(|&index| app.items.get(index))
+            .map(|item| item.path.clone()).collect(),
+    }));
+}
+
+pub fn remember_group_undo(group: usize) {
+    let app = state();
+    if let Some(index) = app.groups.get(group).and_then(|group| group.portal)
+        && let Some(previous) = app.portals.get(index).cloned()
+    {
+        app.undo = Some(crate::state::UndoStep::Portal { index, previous });
+    } else {
+        remember_undo("group");
+    }
 }
 
 /// 撤销最近一步改动：重新扫描桌面，再按快照恢复分组、顺序、名字和自定义图标。
 pub fn undo() -> bool {
     let app = state();
-    let Some(snapshot) = app.undo.take() else {
+    let Some(step) = app.undo.take() else {
         log::info("没有可撤销的操作");
         return false;
+    };
+    let snapshot = match step {
+        crate::state::UndoStep::Panel(snapshot) => snapshot,
+        crate::state::UndoStep::Portal { index, previous } => {
+            crate::portals::restore(&mut app.portals, index, previous);
+            crate::portals::save(&app.portals);
+            app.selected = None;
+            clear_selection();
+            rebuild_portal_items();
+            overlay::relayout();
+            overlay::show_drop_notice(crate::i18n::t("已撤销入口改动", "Undid folder entry change").into());
+            return true;
+        }
     };
     let label = snapshot.label;
     log::info(&format!("撤销：{label}"));
@@ -787,14 +837,9 @@ pub fn undo() -> bool {
     icons::save_hidden(&app.hidden);
     persist_layout();
     rebuild_portal_items();
-    app.selected = snapshot
-        .selected
-        .filter(|index| *index < app.items.len());
-    app.selection = snapshot
-        .selection
-        .into_iter()
-        .filter(|index| *index < app.items.len())
-        .collect();
+    let locate = |path: &PathBuf| app.items.iter().position(|item| icons::same_path(&item.path, path));
+    app.selected = snapshot.selected.as_ref().and_then(locate);
+    app.selection = snapshot.selection.iter().filter_map(locate).collect();
     app.selection_anchor = app.selection.last().copied();
     overlay::relayout();
     if app.shown {
@@ -952,47 +997,14 @@ pub fn remove_items(indices: &[usize]) {
 /// 和面板上看到的一致，跨组拖动后也不会越来越乱。
 pub fn persist_layout() {
     let app = state();
-    let mut order: Vec<usize> = Vec::with_capacity(app.items.len());
-    let mut used = std::collections::HashSet::new();
-    for group in &app.groups {
-        // 入口是只读视图，不进 layout.txt。
-        if group.portal.is_some() {
-            continue;
+    let groups = &app.groups;
+    app.items.sort_by_cached_key(|item| {
+        if item.source == icons::ItemSource::Portal {
+            usize::MAX
+        } else {
+            crate::groups::group_of_or_default(groups, &item.path).unwrap_or(0)
         }
-        for (index, item) in app.items.iter().enumerate() {
-            if used.contains(&index) {
-                continue;
-            }
-            if group
-                .paths
-                .iter()
-                .any(|known| icons::same_path(known, &item.path))
-            {
-                order.push(index);
-                used.insert(index);
-            }
-        }
-    }
-    // 没归组的排在最后。
-    for index in 0..app.items.len() {
-        if app.items[index].source == icons::ItemSource::Portal {
-            continue;
-        }
-        if !used.contains(&index) {
-            order.push(index);
-        }
-    }
-    // 入口项保留在面板末尾，但不进 layout.txt（它们由 portals.txt + 目录内容决定）。
-    for index in 0..app.items.len() {
-        if app.items[index].source == icons::ItemSource::Portal {
-            order.push(index);
-            used.insert(index);
-        }
-    }
-    if order.len() == app.items.len() {
-        let reordered: Vec<_> = order.iter().map(|index| app.items[*index].clone()).collect();
-        app.items = reordered;
-    }
+    });
     let saved: Vec<_> = app
         .items
         .iter()
@@ -1006,25 +1018,64 @@ pub fn persist_layout() {
     icons::save_order(&saved);
 }
 
-/// 拖动排序：把第 `from` 项移动到 `to` 位置。
-pub fn move_item(from: usize, to: usize) {
+fn block_order(count: usize, selected: &[usize], from: usize, target: usize) -> Option<Vec<usize>> {
+    let mut moving = selected.to_vec();
+    moving.sort_unstable();
+    moving.dedup();
+    if target >= count || moving.last().is_none_or(|last| *last >= count)
+        || !moving.contains(&from) || moving.contains(&target) {
+        return None;
+    }
+    let mut order: Vec<_> = (0..count).filter(|index| moving.binary_search(index).is_err()).collect();
+    let position = order.iter().position(|index| *index == target)? + usize::from(from < target);
+    order.splice(position..position, moving);
+    (!order.iter().copied().eq(0..count)).then_some(order)
+}
+
+pub fn reorder_items(from: usize, target: usize) {
     let app = state();
-    if from >= app.items.len() || to >= app.items.len() || from == to {
-        return;
-    }
-    if app.items[from].source == icons::ItemSource::Portal || app.items[to].source == icons::ItemSource::Portal {
-        log::info("入口是只读视图，不能拖动排序");
-        return;
-    }
+    let Some(destination) = app.items.get(target) else { return };
+    let group = crate::groups::group_of_or_default(&app.groups, &destination.path);
+    let selected = if app.selection.contains(&from) { app.selection.as_slice() } else { std::slice::from_ref(&from) };
+    if destination.source == icons::ItemSource::Portal || selected.iter().any(|&index| {
+        app.items.get(index).is_none_or(|item| item.source == icons::ItemSource::Portal
+            || crate::groups::group_of_or_default(&app.groups, &item.path) != group)
+    }) { return; }
+    let Some(order) = block_order(app.items.len(), selected, from, target) else { return };
     remember_undo("move");
-    let item = app.items.remove(from);
-    app.items.insert(to, item);
-    app.selection.clear();
-    app.selection_anchor = None;
+    app.items = order.into_iter().map(|index| app.items[index].clone()).collect();
+    clear_selection();
     app.selected = None;
-    log::info(&format!("调整顺序：{from} → {to}"));
     persist_layout();
     overlay::relayout();
+}
+
+#[cfg(test)]
+mod reorder_tests {
+    use super::block_order;
+
+    #[test]
+    fn block_drag_keeps_visible_order_in_both_directions() {
+        assert_eq!(block_order(6, &[4, 2], 2, 0), Some(vec![2, 4, 0, 1, 3, 5]));
+        assert_eq!(block_order(6, &[3, 1], 1, 5), Some(vec![0, 2, 4, 5, 1, 3]));
+        assert_eq!(block_order(6, &[1, 3], 1, 3), None);
+        assert_eq!(block_order(3, &[1], 1, 2), Some(vec![0, 2, 1]));
+    }
+
+    #[test]
+    fn undo_restores_order_and_names_after_a_block_drag() {
+        use crate::icons::{apply_order_entries, DesktopItem, ItemSource};
+        let mut items: Vec<_> = ["甲", "乙", "丙", "丁"].into_iter().map(|name| DesktopItem {
+            path: name.into(), name: name.into(), source: ItemSource::Custom,
+            offline: true, icon: std::ptr::null_mut(), custom_icon: None,
+        }).collect();
+        let snapshot: Vec<_> = items.iter().map(|item| (item.path.clone(), item.name.clone(), None)).collect();
+        let order = block_order(items.len(), &[3, 1], 3, 0).unwrap();
+        items = order.into_iter().map(|index| items[index].clone()).collect();
+        assert_eq!(items[0].name, "乙");
+        apply_order_entries(&mut items, &snapshot);
+        assert!(items.iter().zip(snapshot).all(|(item, (path, name, _))| item.path == path && item.name == name));
+    }
 }
 
 /// 当前进程的完整性级别 RID：0x1000 = 低，0x2000 = 中，0x3000 = 高。
@@ -1279,6 +1330,9 @@ fn message_loop() -> std::process::ExitCode {
         if result <= 0 {
             break;
         }
+        if overlay::search_edit_key(&message) {
+            continue;
+        }
         // SAFETY: 消息结构由 GetMessage 填充。
         unsafe {
             TranslateMessage(&message);
@@ -1371,6 +1425,25 @@ unsafe extern "system" fn host_proc(
                 overlay::show_panel();
                 // SAFETY: 句柄有效。
                 unsafe { SetTimer(hwnd, TIMER_DEMO, ms, None) };
+            }
+            0
+        }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_DEVICECHANGE => {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{DBT_DEVICEARRIVAL, DBT_DEVICEREMOVECOMPLETE};
+            if matches!(wparam as u32, DBT_DEVICEARRIVAL | DBT_DEVICEREMOVECOMPLETE) {
+                unsafe { SetTimer(hwnd, TIMER_DEVICE_CHANGE, 500, None) };
+            }
+            1
+        }
+        WM_TIMER if wparam == TIMER_DEVICE_CHANGE => {
+            if state().drag.is_some() || state().header_drag.is_some() { return 0; }
+            unsafe { KillTimer(hwnd, TIMER_DEVICE_CHANGE) };
+            if state().shown {
+                refresh_custom_availability();
+                refresh_portals_if_stale();
+                clear_selection();
+                state().selected = None;
+                overlay::relayout();
             }
             0
         }
@@ -1641,10 +1714,15 @@ fn run_drop_test(source: &str) -> std::process::ExitCode {
 fn self_test_report() -> std::process::ExitCode {
     let app = state();
     icons::refresh(&mut app.items);
+    append_custom_items();
+    rebuild_portal_items();
     let layout = overlay::compute_layout(&app.items, &app.groups, 1920, 1080, 96, 48.0);
     let mut lines = Vec::new();
     lines.push(format!("blur={}", app.blur.as_str()));
     lines.push(format!("items={}", app.items.len()));
+    lines.push(format!("offline_items={} offline_entries={}",
+        app.items.iter().filter(|item| item.offline).count(),
+        app.groups.iter().filter(|group| group.offline).count()));
     lines.push(format!("layout_cols={} tiles={}", layout.cols, layout.tiles.len()));
     // 分组：数量、组内引用数、是否有面板上不存在的路径（失效引用会在这里暴露）。
     let grouped: usize = app.groups.iter().map(|group| group.paths.len()).sum();

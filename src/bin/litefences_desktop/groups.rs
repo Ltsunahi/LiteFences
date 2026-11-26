@@ -7,6 +7,7 @@ use crate::icons;
 
 #[derive(Clone, Debug)]
 pub struct Group {
+    pub offline: bool,
     pub name: String,
     pub collapsed: bool,
     pub paths: Vec<PathBuf>,
@@ -17,6 +18,7 @@ pub struct Group {
 impl Group {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
+            offline: false,
             name: name.into(),
             collapsed: false,
             paths: Vec::new(),
@@ -41,6 +43,7 @@ pub fn load() -> Vec<Group> {
         .groups
         .into_iter()
         .map(|entry| Group {
+            offline: false,
             name: entry.name,
             collapsed: entry.collapsed,
             paths: entry.paths.into_iter().map(PathBuf::from).collect(),
@@ -112,9 +115,9 @@ pub fn assign(groups: &mut [Group], path: &Path, target: Option<usize>) {
 }
 
 /// 去掉已经不存在的路径，避免文件越攒越长。
-pub fn prune(groups: &mut [Group]) {
+pub fn prune(groups: &mut [Group], custom: &[PathBuf]) {
     for group in groups.iter_mut() {
-        group.paths.retain(|path| path.exists());
+        group.paths.retain(|path| custom.iter().any(|known| icons::same_path(known, path)) || path.exists());
     }
 }
 

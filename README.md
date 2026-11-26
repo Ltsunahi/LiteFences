@@ -4,7 +4,7 @@
   <p><strong>把桌面图标收进一块随叫随到的磨砂面板。</strong></p>
   <p>Windows 11 · Rust + Win32 · 常驻托盘 · 只整理，不动文件</p>
   <p>
-    <img alt="version" src="https://img.shields.io/badge/version-0.3.5-4C7DFF?style=flat-square">
+    <img alt="version" src="https://img.shields.io/badge/version-0.3.6-4C7DFF?style=flat-square">
     <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2011-0F172A?style=flat-square">
     <img alt="rust" src="https://img.shields.io/badge/Rust%20%2B%20Win32-native-EF6C00?style=flat-square">
     <img alt="license" src="https://img.shields.io/badge/license-MIT-22C55E?style=flat-square">
@@ -77,10 +77,11 @@ LiteFences 启动后没有主窗口，也没有任务栏按钮，只在托盘里
 | `Ctrl+Z` | 撤销最近一次移动、移除、重命名、换图标或分组改动 |
 | `Esc` | 取消多选 / 清除搜索；再按一次收起面板 |
 
-搜索接收 ASCII 字母和数字：支持中文全拼（含多音字）与拼音首字母。面板不抢焦点，
-不支持直接用中文输入法打字。
+唤出面板后可直接敲全拼、首字母或英文。要输入汉字，点击放大镜或已展开的搜索栏，用系统输入法输入「微信」。选词时按 `Enter` 确认候选词，上屏后再按一次打开选中的结果。搜索框也支持粘贴。
 
 图标右键菜单提供「打开所在位置」「属性」「复制路径」，多选时可一次复制多条路径。
+在同一分组内选中多个图标，拖到目标图标上松手，即可保持原有相对顺序整批移动。`Ctrl+Z` 可撤销这一步。
+移动硬盘上的手动图标和文件夹入口会保留在原位，设备断开时显示「暂不可用」，重新连接后自动刷新。网络目录可在再次唤出面板时刷新。
 托盘菜单「检查更新…」手动检查 GitHub Releases，也可关闭启动时的自动检查。
 
 ## 构建
@@ -116,7 +117,7 @@ dotnet tool install --global wix --version 5.*
 | `config.broken.json` | 解析失败时自动留底的坏文件（正常不会有） |
 | `launcher.log` | 运行日志，512 KiB 轮换 |
 
-写入采用「先写临时文件再改名」的原子替换；解析失败会备份坏文件并退回默认配置。
+写入配置时先写临时文件再改名。主配置丢失或损坏时，程序会尝试恢复有效的 `config.json.bak`，损坏的主配置留在 `config.broken.json`。成功恢复后，首次唤出面板会显示提示。
 旧版的 `layout.txt` / `groups.txt` / `portals.txt` / `settings.txt` 会在首次启动时自动迁移。
 
 </details>
@@ -128,7 +129,6 @@ dotnet tool install --global wix --version 5.*
 - 只在 Win11 + 单屏开发机上实测过；Win10、多屏 / 混合 DPI 还没有实机验证。
 - 受限权限（低完整性级别）下托盘创建会失败，热键仍然可用。
 - 桌面空白双击唤出依赖系统鼠标钩子，装了其它桌面整理软件时可能被抢。
-- 搜索支持全拼、拼音首字母和多音字，但中文输入法不能直接在面板里打字。
 
 </details>
 

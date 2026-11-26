@@ -27,9 +27,16 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::UI::Controls::MARGINS;
+use windows_sys::Win32::UI::Controls::EM_SETSEL;
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EN_CHANGE, ES_AUTOHSCROLL, GetWindowTextLengthW, GetWindowTextW, MSG, SendMessageW,
+    WM_COMMAND, WM_IME_STARTCOMPOSITION, WM_IME_ENDCOMPOSITION, WM_SETFONT, WS_CHILD,
+    WS_CLIPCHILDREN, WS_VISIBLE,
+};
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_SHIFT,
+    GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_DBLCLKS, CreatePopupMenu, CreateWindowExW, DI_NORMAL, DefWindowProcW,
@@ -39,7 +46,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SW_SHOWNOACTIVATE,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN,
-    TrackPopupMenu, WM_CHAR, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    TrackPopupMenu, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDBLCLK,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
     WM_PAINT,
     WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
@@ -164,7 +171,7 @@ pub fn create(hinstance: HINSTANCE) -> Result<HWND, String> {
             WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
             class_name.as_ptr(),
             title.as_ptr(),
-            WS_POPUP,
+            WS_POPUP | WS_CLIPCHILDREN,
             0,
             0,
             0,
@@ -349,6 +356,7 @@ pub fn show_panel() {
         GetWindowRect(app.overlay, &mut client);
     }
     // 入口目录的内容在变化时重读（目录时间戳没变就复用上次结果）。
+    crate::app::refresh_custom_availability();
     crate::app::refresh_portals_if_stale();
     // DPI 必须在窗口挪到目标显示器之后再取，多屏不同缩放时才对。
     let dpi = unsafe { GetDpiForWindow(app.overlay) };
@@ -419,6 +427,9 @@ pub fn show_panel() {
     }
     app.shown = true;
     app.shown_at = Some(Instant::now());
+    if crate::store::take_recovery_notice() {
+        show_drop_notice(crate::i18n::t("已从备份恢复配置", "Settings restored from backup").into());
+    }
     app.hover = None;
     // 每次唤出都从普通模式开始，避免上次的“移除中”状态残留。
     // 排障参数：直接选中某个图标，便于截图验证选中框。
@@ -482,6 +493,10 @@ pub fn reshow() {
     if !state().shown {
         return;
     }
+    if !state().search_edit.is_null() {
+        relayout();
+        return;
+    }
     if ensure_window().is_err() {
         log::error("重建浮层窗口失败");
         return;
@@ -516,6 +531,9 @@ pub fn reshow() {
             apply_accent(app.overlay, TINT_ALPHA);
         }
         ShowWindow(app.overlay, SW_SHOWNOACTIVATE);
+        if app.drop_notice.is_some() {
+            SetTimer(app.overlay, TIMER_DROP_NOTICE, 4000, None);
+        }
         InvalidateRect(app.overlay, std::ptr::null(), 0);
     }
 }
@@ -538,6 +556,7 @@ pub fn hide_panel() {
     // SAFETY: 句柄有效。
     unsafe {
         KillTimer(app.overlay, TIMER_DROP_NOTICE);
+        KillTimer(app.overlay, TIMER_SEARCH);
         ShowWindow(app.overlay, SW_HIDE);
         // 收起后取消置顶，避免残留的 topmost 影响其他窗口。
         SetWindowPos(
@@ -1051,11 +1070,10 @@ fn open_header_menu(group_index: usize) {
 }
 
 fn rename_group(index: usize) {
-    let current = state()
-        .groups
-        .get(index)
-        .map(|group| group.name.clone())
-        .unwrap_or_default();
+    let app = state();
+    let Some(group) = app.groups.get(index) else { return };
+    let current = group.portal.and_then(|index| app.portals.get(index))
+        .map_or_else(|| group.name.clone(), |portal| portal.name.clone());
     if current.is_empty() {
         return;
     }
@@ -1066,20 +1084,21 @@ fn rename_group(index: usize) {
     if name.is_empty() || name == current {
         return;
     }
-    crate::app::remember_undo("group");
+    crate::app::remember_group_undo(index);
     let app = state();
     let Some(group) = app.groups.get_mut(index) else {
         return;
     };
-    let portal_index = group.portal;
-    group.name = name.clone();
-    if let Some(index) = portal_index {
+    if let Some(index) = group.portal {
         if let Some(portal) = app.portals.get_mut(index) {
             portal.name = name.clone();
         }
+        group.name = format!("{}{name}", crate::i18n::t("入口：", "Entry: "));
         crate::portals::save(&app.portals);
+    } else {
+        group.name = name.clone();
+        crate::groups::save(&app.groups);
     }
-    crate::groups::save(&app.groups);
     log::info(&format!("分组改名：{current} → {name}"));
     relayout();
 }
@@ -1092,8 +1111,8 @@ fn delete_group(index: usize) {
     if group.name == crate::groups::DEFAULT_GROUP {
         return;
     }
-    crate::app::remember_undo("group");
     let name = group.name.clone();
+    crate::app::remember_group_undo(index);
     if let Some(portal_index) = group.portal {
         // 只读入口：只摘掉入口本身，不碰目录里的文件。
         if portal_index < app.portals.len() {
@@ -2046,8 +2065,9 @@ fn draw_one_header(hdc: HDC, app: &crate::state::App, header: &Header, rect: REC
             .count()
     };
     let arrow = if group.collapsed { "▶" } else { "▼" };
+    let status = if group.offline { crate::i18n::t(" · 暂不可用", " · Offline") } else { "" };
     let text = wide(&format!(
-        "{arrow}  {}  ({count})",
+        "{arrow}  {}  ({count}){status}",
         crate::groups::display_name(&group.name)
     ));
     // SAFETY: 画笔与底色用完即释放。
@@ -2180,7 +2200,12 @@ fn draw_items(hdc: HDC, app: &crate::state::App, paint: &RECT) {
                 let y = tile.top + ((12.0 * scale) as i32);
                 DrawIconEx(hdc, x, y, item.icon, icon, icon, 0, std::ptr::null_mut(), DI_NORMAL);
             }
-            draw_label(hdc, &item.name, tile, scale, icon, app.theme);
+            if item.offline {
+                let label = format!("{} · {}", crate::i18n::t("暂不可用", "Offline"), item.name);
+                draw_label(hdc, &label, tile, scale, icon, app.theme);
+            } else {
+                draw_label(hdc, &item.name, tile, scale, icon, app.theme);
+            }
         }
     }
 }
@@ -2819,7 +2844,7 @@ fn draw_search_box(hdc: HDC, app: &crate::state::App, paint: &RECT) {
                 &mut rect,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
             );
-            if app.search_typing {
+            if !app.search_edit.is_null() {
                 let underline = RECT {
                     left: box_rect.left + (10.0 * scale) as i32,
                     top: box_rect.bottom - (4.0 * scale) as i32,
@@ -2887,9 +2912,9 @@ pub fn type_to_search(ch: char) {
     }
     if !app.search_open {
         log::info("唤出后直接打字：进入搜索");
+        unsafe { KillTimer(app.overlay, TIMER_SEARCH) };
         app.search_open = true;
         app.search_anim = None;
-        app.search_typing = false;
     }
     app.search.push(ch);
     apply_search(app);
@@ -2904,7 +2929,7 @@ pub fn search_backspace() -> bool {
         return true;
     }
     if app.search_open {
-        toggle_search();
+        close_search();
         return true;
     }
     false
@@ -3006,6 +3031,30 @@ fn apply_search(app: &mut crate::state::App) {
 /// 让面板临时接收键盘：去掉 NOACTIVATE 并抢到前台，搜索结束时再恢复。
 fn activate_typing() {
     let app = state();
+    unsafe { KillTimer(app.overlay, TIMER_SEARCH) };
+    app.search_open = true;
+    app.search_anim = None;
+    let rect = search_rect(app);
+    let parent = app.overlay;
+    let text = wide(&app.search);
+    let font = ui_font(app);
+    let edit = unsafe {
+        CreateWindowExW(0, wide("EDIT").as_ptr(), text.as_ptr(),
+            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL as u32, rect.left, rect.top,
+            rect.right - rect.left, rect.bottom - rect.top, parent, 2001 as _,
+            std::ptr::null_mut(), std::ptr::null())
+    };
+    if edit.is_null() {
+        log::warn("无法创建搜索输入框");
+        return;
+    }
+    if unsafe { SetWindowSubclass(edit, Some(search_edit_proc), 1, 0) } == 0 {
+        unsafe { DestroyWindow(edit) };
+        log::warn("无法初始化搜索输入框");
+        return;
+    }
+    app.search_edit = edit;
+    app.ime_composing = false;
     // SAFETY: 句柄有效；只临时改扩展样式。
     unsafe {
         let style = GetWindowLongPtrW(app.overlay, GWL_EXSTYLE);
@@ -3015,20 +3064,29 @@ fn activate_typing() {
             style & !(WS_EX_NOACTIVATE as isize),
         );
         SetForegroundWindow(app.overlay);
-        SetFocus(app.overlay);
+        SendMessageW(edit, WM_SETFONT, font as usize, 1);
+        let end = text.len() - 1;
+        SendMessageW(edit, EM_SETSEL, end, end as isize);
+        SetFocus(edit);
     }
-    app.search_typing = true;
+    if unsafe { GetFocus() } != edit {
+        deactivate_typing();
+        log::warn("搜索输入框未获得焦点");
+        return;
+    }
     log::info("搜索输入已激活");
 }
 
 fn deactivate_typing() {
     let app = state();
-    if !app.search_typing {
+    if app.search_edit.is_null() {
         return;
     }
-    app.search_typing = false;
+    let edit = std::mem::replace(&mut app.search_edit, std::ptr::null_mut());
+    app.ime_composing = false;
     // SAFETY: 恢复“不抢焦点”的行为。
     unsafe {
+        DestroyWindow(edit);
         let style = GetWindowLongPtrW(app.overlay, GWL_EXSTYLE);
         SetWindowLongPtrW(
             app.overlay,
@@ -3038,20 +3096,50 @@ fn deactivate_typing() {
     }
 }
 
-/// 点放大镜：展开或收起搜索栏（带动画）。
-fn toggle_search() {
-    let app = state();
-    if app.search_open {
-        // 收起：退出输入态，动画缩回，并清空过滤。
-        deactivate_typing();
-        app.search_open = false;
-        app.search_anim = Some(Instant::now());
-        crate::app::set_search_text("");
-        rebuild_layout(app);
-    } else {
-        app.search_open = true;
-        app.search_anim = Some(Instant::now());
+unsafe extern "system" fn search_edit_proc(
+    hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize,
+) -> LRESULT {
+    match message {
+        WM_IME_STARTCOMPOSITION => state().ime_composing = true,
+        WM_IME_ENDCOMPOSITION => state().ime_composing = false,
+        _ => {}
     }
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
+pub fn search_edit_key(message: &MSG) -> bool {
+    let app = state();
+    if message.message != WM_KEYDOWN || app.search_edit.is_null() || message.hwnd != app.search_edit
+    {
+        return false;
+    }
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_DOWN, VK_ESCAPE, VK_RETURN, VK_UP};
+    if !is_search_command(message.wParam as u16, app.ime_composing) {
+        return false;
+    }
+    match message.wParam as u16 {
+        VK_RETURN if message.lParam & (1 << 30) != 0 => {}
+        VK_RETURN => open_selected(),
+        VK_ESCAPE => handle_escape(),
+        VK_UP => move_selection(0, -1),
+        VK_DOWN => move_selection(0, 1),
+        _ => return false,
+    }
+    true
+}
+
+fn is_search_command(key: u16, composing: bool) -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_DOWN, VK_ESCAPE, VK_RETURN, VK_UP};
+    !composing && matches!(key, VK_RETURN | VK_ESCAPE | VK_UP | VK_DOWN)
+}
+
+fn close_search() {
+    let app = state();
+    deactivate_typing();
+    app.search_open = false;
+    app.search_anim = Some(Instant::now());
+    crate::app::set_search_text("");
+    rebuild_layout(app);
     // SAFETY: 句柄有效；只重画工具条这一块。
     unsafe {
         let bar = toolbar_rect(app);
@@ -3059,7 +3147,7 @@ fn toggle_search() {
         SetTimer(app.overlay, TIMER_SEARCH, 16, None);
         UpdateWindow(app.overlay);
     }
-    log::info(&format!("搜索栏：{}", if app.search_open { "展开" } else { "收起" }));
+    log::info("搜索栏收起");
 }
 
 /// 界面字体：按缩放只创建一次，避免每帧重建导致动画卡顿。
@@ -3098,12 +3186,12 @@ fn draw_hint(hdc: HDC, app: &crate::state::App, paint: &RECT) {
         (
             if crate::i18n::is_en() {
                 format!(
-                    "{} selected　·　Ctrl+click toggles　·　Shift selects a range　·　drag to move　·　Delete to remove　·　Esc to clear",
+                    "{} selected　·　Drag to reorder or move to a group　·　Delete to remove　·　Esc to clear",
                     app.selection.len()
                 )
             } else {
                 format!(
-                    "已选 {} 项　·　Ctrl 点选增减　·　Shift 连选　·　拖动整组移入　·　Delete 移除　·　Esc 取消",
+                    "已选 {} 项　·　组内拖动排序，跨组拖动移入　·　Delete 移除　·　Esc 取消",
                     app.selection.len()
                 )
             },
@@ -3424,7 +3512,7 @@ pub fn handle_escape() {
     }
     let app = state();
     if app.search_open {
-        toggle_search();
+        close_search();
         return;
     }
     if !app.search.is_empty() {
@@ -3442,6 +3530,7 @@ pub fn handle_escape() {
     }
     if !app.selection.is_empty() {
         app.selection.clear();
+        app.selected = None;
         app.selection_anchor = None;
         app.static_dirty = true;
         log::info("Esc：取消多选");
@@ -3627,17 +3716,13 @@ fn click_select(index: usize, ctrl: bool, shift: bool) {
         } else {
             app.selection.push(index);
         }
-        app.selection_anchor = Some(index);
+        app.selection_anchor = selection_focus(&app.selection, index);
     } else {
         app.selection.clear();
         app.selection.push(index);
         app.selection_anchor = Some(index);
     }
-    app.selected = if app.selection.is_empty() {
-        None
-    } else {
-        Some(index)
-    };
+    app.selected = selection_focus(&app.selection, index);
     app.static_dirty = true;
     log::info(&format!("多选：{} 项", app.selection.len()));
     // SAFETY: 句柄有效；选中框在静态帧之后画，整屏重画一帧。
@@ -3645,6 +3730,10 @@ fn click_select(index: usize, ctrl: bool, shift: bool) {
         InvalidateRect(app.overlay, std::ptr::null(), 0);
         UpdateWindow(app.overlay);
     }
+}
+
+fn selection_focus(selection: &[usize], clicked: usize) -> Option<usize> {
+    if selection.contains(&clicked) { Some(clicked) } else { selection.last().copied() }
 }
 
 /// Ctrl+Z：撤销最近一步。
@@ -3655,7 +3744,7 @@ pub fn undo_last() {
 /// Delete：移除多选（或键盘选中）的项；返回是否处理了按键。
 pub fn remove_selection() -> bool {
     let app = state();
-    if app.search_typing || !app.search.is_empty() {
+    if !app.search_edit.is_null() || !app.search.is_empty() {
         return false;
     }
     let mut indices = app.selection.clone();
@@ -3798,6 +3887,12 @@ fn launch_and_hide(index: usize) {    let app = state();
         return;
     };
     let path = item.path.clone();
+    if item.source == icons::ItemSource::Custom && !path.exists() {
+        crate::app::refresh_custom_availability();
+        relayout();
+        show_drop_notice(crate::i18n::t("路径暂不可用，请检查设备连接", "Path unavailable. Check the device connection.").into());
+        return;
+    }
     hide_panel();
     match icons::launch(&path) {
         Ok(()) => {}
@@ -3817,24 +3912,15 @@ unsafe extern "system" fn overlay_proc(
             0
         }
         WM_ERASEBKGND => 1,
-        WM_CHAR => {
+        WM_COMMAND if (wparam >> 16) as u32 == EN_CHANGE && wparam & 0xffff == 2001 => {
             let app = state();
-            if app.search_typing {
-                let value = wparam as u32;
-                if value >= 0x20
-                    && value != 0x7F
-                    && let Some(ch) = char::from_u32(value)
-                {
-                    app.search.push(ch);
-                    apply_search(app);
-                }
-            }
-            0
-        }
-        WM_KEYDOWN => {
-            let app = state();
-            if app.search_typing && wparam as u32 == 0x08 {
-                search_backspace();
+            let edit = lparam as HWND;
+            if !edit.is_null() && edit == app.search_edit {
+                let capacity = unsafe { GetWindowTextLengthW(edit) } + 1;
+                let mut buffer = vec![0; capacity as usize];
+                let count = unsafe { GetWindowTextW(edit, buffer.as_mut_ptr(), capacity) };
+                app.search = String::from_utf16_lossy(&buffer[..count as usize]);
+                apply_search(app);
             }
             0
         }
@@ -3846,13 +3932,9 @@ unsafe extern "system" fn overlay_proc(
                 .search_anim
                 .is_some_and(|started| started.elapsed() >= Duration::from_millis(160));
             if finished {
-                let open = app.search_open;
                 app.search_anim = None;
                 // SAFETY: 句柄有效。
                 unsafe { KillTimer(hwnd, TIMER_SEARCH) };
-                if open {
-                    activate_typing();
-                }
                 // SAFETY: 句柄有效；让最终状态整屏落定。
                 unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
             } else {
@@ -4109,13 +4191,12 @@ unsafe extern "system" fn overlay_proc(
                             )
                             .to_string(),
                         );
-                    } else if app.selection.len() <= 1
-                        && let Some(target) = target
+                    } else if let Some(target) = target
                         && target != drag.from
                         && app.search.is_empty()
                         && target < app.items.len()
                     {
-                        crate::app::move_item(drag.from, target);
+                        crate::app::reorder_items(drag.from, target);
                     }
                     // 松手后整屏重贴一次，清掉跟随图标留下的痕迹。
                     // SAFETY: 句柄有效。
@@ -4203,7 +4284,12 @@ unsafe extern "system" fn overlay_proc(
                 if in_search {
                     log::info("点击搜索按钮");
                     crate::app::clear_selection();
-                    toggle_search();
+                    if state().search_edit.is_null() {
+                        activate_typing();
+                        unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
+                    } else {
+                        close_search();
+                    }
                     return 0;
                 }
                 if in_chip {
@@ -4221,7 +4307,7 @@ unsafe extern "system" fn overlay_proc(
                 }
                 // 搜索栏开着时，点空白处先收起搜索；点结果照常打开。
                 if state().search_open && hit_test(x, y).is_none() {
-                    toggle_search();
+                    close_search();
                     return 0;
                 }
                 // 整条分组标题都能点：按下先记录，松开没拖动就折叠/展开，拖过就是调顺序。
@@ -4407,6 +4493,16 @@ unsafe extern "system" fn overlay_proc(
             app.layout = layout;
             app.scroll = 0;
             app.static_dirty = true;
+            if !app.search_edit.is_null() {
+                let rect = search_rect(app);
+                let font = ui_font(app);
+                unsafe {
+                    SetWindowPos(app.search_edit, std::ptr::null_mut(), rect.left, rect.top,
+                        rect.right - rect.left, rect.bottom - rect.top, SWP_NOACTIVATE);
+                    SendMessageW(app.search_edit, WM_SETFONT, font as usize, 1);
+                }
+            }
+            if !app.search.is_empty() { apply_search(app); }
             log::info(&format!("DPI 变化：{dpi}，面板 {width}x{height}"));
             // SAFETY: 句柄有效。
             unsafe { InvalidateRect(hwnd, std::ptr::null(), 0) };
@@ -4421,6 +4517,26 @@ unsafe extern "system" fn overlay_proc(
 
 #[cfg(test)]
 mod layout_tests {
+
+    #[test]
+    fn ctrl_click_keeps_keyboard_focus_inside_remaining_selection() {
+        assert_eq!(super::selection_focus(&[1, 3], 1), Some(1));
+        assert_eq!(super::selection_focus(&[1], 3), Some(1));
+        assert_eq!(super::selection_focus(&[], 1), None);
+    }
+
+    #[test]
+    fn candidates_receive_keys_before_search_commands() {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
+        for key in [VK_RETURN, VK_ESCAPE, VK_UP, VK_DOWN] {
+            assert!(!super::is_search_command(key, true));
+            assert!(super::is_search_command(key, false));
+        }
+        for key in [VK_PROCESSKEY, VK_SPACE, VK_LEFT, VK_RIGHT, VK_BACK, VK_DELETE] {
+            assert!(!super::is_search_command(key, false));
+        }
+        assert!(crate::search::matches("企业微信", "微信"));
+    }
 
     #[test]
     fn group_at_content_follows_section_boundaries() {
@@ -4481,6 +4597,7 @@ mod layout_tests {
 
     fn item(name: &str) -> DesktopItem {
         DesktopItem {
+            offline: false,
             path: PathBuf::from(format!("C:\\桌面\\{name}")),
             name: name.to_string(),
             // 布局不碰图标句柄，空句柄足够。
