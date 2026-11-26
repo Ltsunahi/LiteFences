@@ -14,11 +14,6 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
-    let Some(rc) = find_rc() else {
-        println!("cargo:warning=找不到 rc.exe（Windows SDK），本次构建不带图标和版本信息");
-        return;
-    };
-
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let icon = manifest.join("packaging").join("app.ico");
     if !icon.exists() {
@@ -81,19 +76,73 @@ fn main() {
     }
 
     let res = out_dir.join("litefences.res");
-    let status = Command::new(&rc)
+    if compile_with_rc(&rc_source, &res) || compile_with_windres(&rc_source, &res) {
+        println!("cargo:rustc-link-arg={}", res.display());
+    } else {
+        println!("cargo:warning=找不到可用的 rc.exe 或 windres.exe，本次构建不带图标和版本信息");
+    }
+}
+
+fn compile_with_rc(rc_source: &std::path::Path, res: &std::path::Path) -> bool {
+    let Some(rc) = find_rc() else {
+        return false;
+    };
+    Command::new(&rc)
         .arg("/nologo")
         .arg("/fo")
-        .arg(&res)
-        .arg(&rc_source)
-        .status();
-    match status {
-        Ok(status) if status.success() => {
-            println!("cargo:rustc-link-arg={}", res.display());
+        .arg(res)
+        .arg(rc_source)
+        .status()
+        .is_ok_and(|s| s.success())
+        && res.is_file()
+}
+
+fn compile_with_windres(rc_source: &std::path::Path, res: &std::path::Path) -> bool {
+    let Some(windres) = find_windres() else {
+        println!("cargo:warning=未找到 windres.exe");
+        return false;
+    };
+    let output = Command::new(&windres)
+        .args(["-c", "65001", "-i"])
+        .arg(rc_source)
+        .args(["-O", "res", "-o"])
+        .arg(res)
+        .output();
+    match output {
+        Ok(out) if out.status.success() && res.is_file() => true,
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            println!(
+                "cargo:warning=windres 失败 ({}) {}: {}",
+                windres.display(),
+                out.status,
+                err.trim()
+            );
+            false
         }
-        Ok(status) => println!("cargo:warning=rc.exe 退出码 {status}"),
-        Err(error) => println!("cargo:warning=调用 rc.exe 失败：{error}"),
+        Err(error) => {
+            println!("cargo:warning=调用 windres 失败 ({}): {error}", windres.display());
+            false
+        }
     }
+}
+
+fn find_windres() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("WINDRES") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join("windres.exe");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 /// rc.exe 的字符串里，反斜杠会被当成转义（`\n` 变换行），所以路径里的反斜杠要写两遍。

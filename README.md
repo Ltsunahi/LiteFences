@@ -4,7 +4,7 @@
   <p><strong>把桌面图标收进一块随叫随到的磨砂面板。</strong></p>
   <p>Windows 11 · Rust + Win32 · 常驻托盘 · 只整理，不动文件</p>
   <p>
-    <img alt="version" src="https://img.shields.io/badge/version-0.3.6-4C7DFF?style=flat-square">
+    <img alt="version" src="https://img.shields.io/badge/version-0.3.7-4C7DFF?style=flat-square">
     <img alt="platform" src="https://img.shields.io/badge/platform-Windows%2011-0F172A?style=flat-square">
     <img alt="rust" src="https://img.shields.io/badge/Rust%20%2B%20Win32-native-EF6C00?style=flat-square">
     <img alt="license" src="https://img.shields.io/badge/license-MIT-22C55E?style=flat-square">
