@@ -98,6 +98,12 @@ unsafe fn consider_show() {
         log::info(&format!("双击命中 {class}，不是桌面空白处，忽略"));
         return;
     }
+    if state().ignore_fullscreen
+        && crate::util::is_foreground_fullscreen(&[state().host, state().overlay])
+    {
+        log::info("前台全屏应用运行中，已跳过双击唤出");
+        return;
+    }
     log::info("桌面空白处双击，唤出面板");
     overlay::show_panel();
 }
@@ -193,6 +199,8 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                     vk if vk == u32::from(VK_RETURN) => {
                         if ctrl_held && shift_held {
                             overlay::open_selected_admin();
+                        } else if ctrl_held {
+                            overlay::reveal_selected();
                         } else {
                             overlay::open_selected();
                         }

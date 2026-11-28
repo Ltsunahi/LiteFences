@@ -117,6 +117,47 @@ impl IconDensity {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum MonitorPolicy {
+    #[default]
+    Cursor,
+    Primary,
+}
+
+impl MonitorPolicy {
+    pub fn parse(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "primary" => Self::Primary,
+            _ => Self::Cursor,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cursor => "cursor",
+            Self::Primary => "primary",
+        }
+    }
+
+    pub fn all() -> [Self; 2] {
+        [Self::Cursor, Self::Primary]
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Cursor => 0,
+            Self::Primary => 1,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cursor => crate::i18n::t("跟随鼠标所在屏幕", "Follow cursor monitor"),
+            Self::Primary => crate::i18n::t("固定在主屏", "Primary monitor only"),
+        }
+    }
+}
+
 /// 全部设置。字段少，直接整份读整份写，避免改一项冲掉另一项。
 #[derive(Clone, Debug)]
 pub struct Settings {
@@ -128,6 +169,12 @@ pub struct Settings {
     pub check_updates: bool,
     /// 图标尺寸档位。
     pub density: IconDensity,
+    /// 是否显示「最近常用」置顶栏。
+    pub show_recent: bool,
+    /// 前台全屏应用运行时跳过热键/双击唤出。
+    pub ignore_fullscreen: bool,
+    /// 多屏唤出位置策略。
+    pub monitor: MonitorPolicy,
 }
 
 impl Default for Settings {
@@ -138,6 +185,9 @@ impl Default for Settings {
             lang: "auto".to_string(),
             check_updates: true,
             density: IconDensity::Normal,
+            show_recent: true,
+            ignore_fullscreen: true,
+            monitor: MonitorPolicy::Cursor,
         }
     }
 }
@@ -160,6 +210,9 @@ pub fn load() -> Settings {
     }
     settings.check_updates = section.check_updates;
     settings.density = IconDensity::parse(&section.density);
+    settings.show_recent = section.show_recent;
+    settings.ignore_fullscreen = section.ignore_fullscreen;
+    settings.monitor = MonitorPolicy::parse(&section.monitor);
     settings
 }
 
@@ -172,6 +225,9 @@ pub fn save(settings: &Settings) {
         lang: settings.lang.clone(),
         check_updates: settings.check_updates,
         density: settings.density.as_str().to_string(),
+        show_recent: settings.show_recent,
+        ignore_fullscreen: settings.ignore_fullscreen,
+        monitor: settings.monitor.as_str().to_string(),
     };
     crate::store::save(&config);
     log::info(&format!(
@@ -196,6 +252,16 @@ mod tests {
         assert!(IconDensity::Normal.scale_factor() < IconDensity::Large.scale_factor());
         for d in IconDensity::all() {
             assert_eq!(IconDensity::parse(d.as_str()), d);
+        }
+    }
+
+    #[test]
+    fn monitor_policy_parses_and_round_trips() {
+        assert_eq!(MonitorPolicy::parse("primary"), MonitorPolicy::Primary);
+        assert_eq!(MonitorPolicy::parse("CURSOR"), MonitorPolicy::Cursor);
+        assert_eq!(MonitorPolicy::parse("other"), MonitorPolicy::Cursor);
+        for p in MonitorPolicy::all() {
+            assert_eq!(MonitorPolicy::parse(p.as_str()), p);
         }
     }
 }

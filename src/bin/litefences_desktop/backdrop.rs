@@ -356,19 +356,68 @@ pub fn capture(area: RECT, tint_color: (u8, u8, u8), tint_strength: f32) -> Opti
         }
         let previous = SelectObject(memory, bitmap as _);
         SetStretchBltMode(memory, HALFTONE);
-        StretchBlt(
-            memory,
-            0,
-            0,
-            small_width,
-            small_height,
-            screen,
-            area.left,
-            area.top,
-            width,
-            height,
-            SRCCOPY,
-        );
+        if area.left < 0 || area.top < 0 {
+            // 部分显示驱动对负坐标桌面 DC 直接做 HALFTONE StretchBlt 会采样偏移或失败；
+            // 先 1:1 BitBlt 进兼容位图（源坐标回到 0,0），再缩小模糊。
+            let copy_dc = CreateCompatibleDC(screen);
+            let copy_bmp = CreateCompatibleBitmap(screen, width, height);
+            let mut copied = false;
+            if !copy_dc.is_null() && !copy_bmp.is_null() {
+                let old_copy = SelectObject(copy_dc, copy_bmp as _);
+                if BitBlt(copy_dc, 0, 0, width, height, screen, area.left, area.top, SRCCOPY) != 0 {
+                    StretchBlt(
+                        memory,
+                        0,
+                        0,
+                        small_width,
+                        small_height,
+                        copy_dc,
+                        0,
+                        0,
+                        width,
+                        height,
+                        SRCCOPY,
+                    );
+                    copied = true;
+                }
+                SelectObject(copy_dc, old_copy);
+            }
+            if !copy_bmp.is_null() {
+                DeleteObject(copy_bmp as _);
+            }
+            if !copy_dc.is_null() {
+                DeleteDC(copy_dc);
+            }
+            if !copied {
+                StretchBlt(
+                    memory,
+                    0,
+                    0,
+                    small_width,
+                    small_height,
+                    screen,
+                    area.left,
+                    area.top,
+                    width,
+                    height,
+                    SRCCOPY,
+                );
+            }
+        } else {
+            StretchBlt(
+                memory,
+                0,
+                0,
+                small_width,
+                small_height,
+                screen,
+                area.left,
+                area.top,
+                width,
+                height,
+                SRCCOPY,
+            );
+        }
         SelectObject(memory, previous);
         DeleteDC(memory);
         ReleaseDC(std::ptr::null_mut(), screen);

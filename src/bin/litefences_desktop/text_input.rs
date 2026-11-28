@@ -17,10 +17,11 @@ use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetCursorPos,
-    GetMessageW, GetWindowTextW, IDC_ARROW, LoadCursorW, MSG, RegisterClassW,
-    SW_SHOW, SetForegroundWindow, ShowWindow, TranslateMessage, WM_CLOSE, WM_COMMAND,
+    GetMessageW, GetWindowTextW, HWND_TOPMOST, IDC_ARROW, LoadCursorW, MSG, RegisterClassW,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_SHOW, SendMessageW,
+    SetForegroundWindow, SetWindowPos, ShowWindow, TranslateMessage, WM_CLOSE, WM_COMMAND,
     WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_KEYDOWN, WM_PAINT,
-    WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SWP_NOACTIVATE, SetWindowPos,
+    WM_SETFONT, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
 };
 
 use crate::log;
@@ -44,6 +45,8 @@ struct State {
     title: String,
     /// 暗色输入框用的画刷（要长期存活，才能作为 WM_CTLCOLOREDIT 的返回值）。
     brush: HBRUSH,
+    /// 输入框缩放字体，销毁窗口时一起释放。
+    font: HFONT,
 }
 
 /// 每次打开都会重置的状态（`None` = 没有正在进行的输入）。
@@ -87,6 +90,7 @@ pub fn ask(title: &str, initial: &str) -> Option<String> {
         title: title.to_string(),
         // SAFETY: 画刷由本模块创建，`ask` 返回前释放。
         brush: unsafe { CreateSolidBrush(DARK_BG) },
+        font: std::ptr::null_mut(),
     });
     let Some(hwnd) = create_window(initial) else {
         finish();
@@ -109,8 +113,13 @@ pub fn ask(title: &str, initial: &str) -> Option<String> {
 /// 收尾：清掉对话框状态并释放它用过的画刷。
 fn finish() {
     if let Some(done) = slot().take() {
-        // SAFETY: 画刷由本模块创建，销毁前不再被控件引用。
-        unsafe { DeleteObject(done.brush as _) };
+        // SAFETY: 画刷与字体由本模块创建，销毁前不再被控件引用。
+        unsafe {
+            DeleteObject(done.brush as _);
+            if !done.font.is_null() {
+                DeleteObject(done.font as _);
+            }
+        }
     }
 }
 
@@ -147,14 +156,10 @@ fn create_window(initial: &str) -> Option<HWND> {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
-        let (left, top) = if GetMonitorInfoW(monitor, &mut info) != 0 {
-            let area = info.rcMonitor;
-            (
-                area.left + (area.right - area.left - WIDTH) / 2,
-                area.top + (area.bottom - area.top - HEIGHT) / 2,
-            )
-        } else {
-            (400, 300)
+        let work = (GetMonitorInfoW(monitor, &mut info) != 0).then_some(info.rcWork);
+        let (left, top) = match work {
+            Some(area) => crate::util::center_in_rect(area, WIDTH, HEIGHT),
+            None => (400, 300),
         };
         let title = wide(crate::i18n::t("新建分组", "New group"));
         let hwnd = CreateWindowExW(
@@ -177,7 +182,24 @@ fn create_window(initial: &str) -> Option<HWND> {
             log::error(&format!("无法创建输入窗口，错误码 {error}"));
             return None;
         }
+        let dpi = GetDpiForWindow(hwnd).max(96);
+        let scaled_w = crate::util::scale_i32(WIDTH, dpi);
+        let scaled_h = crate::util::scale_i32(HEIGHT, dpi);
+        let (scaled_left, scaled_top) = match work {
+            Some(area) => crate::util::center_in_rect(area, scaled_w, scaled_h),
+            None => (left, top),
+        };
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            scaled_left,
+            scaled_top,
+            scaled_w,
+            scaled_h,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
         log::info("输入窗口已创建");
+        let s = |px: i32| crate::util::scale_i32(px, dpi);
         let edit_class = wide("EDIT");
         let value = wide(initial);
         let edit = CreateWindowExW(
@@ -185,10 +207,10 @@ fn create_window(initial: &str) -> Option<HWND> {
             edit_class.as_ptr(),
             value.as_ptr(),
             WS_CHILD | WS_VISIBLE | 0x0080,
-            24,
-            70,
-            WIDTH - 48,
-            34,
+            s(24),
+            s(70),
+            scaled_w - s(48),
+            s(34),
             hwnd,
             EDIT_ID as _,
             hinstance,
@@ -202,10 +224,10 @@ fn create_window(initial: &str) -> Option<HWND> {
             button_class.as_ptr(),
             ok.as_ptr(),
             WS_CHILD | WS_VISIBLE | BS_OWNERDRAW as u32,
-            WIDTH - 220,
-            126,
-            90,
-            34,
+            scaled_w - s(220),
+            s(126),
+            s(90),
+            s(34),
             hwnd,
             OK_ID as _,
             hinstance,
@@ -216,31 +238,23 @@ fn create_window(initial: &str) -> Option<HWND> {
             button_class.as_ptr(),
             cancel.as_ptr(),
             WS_CHILD | WS_VISIBLE | BS_OWNERDRAW as u32,
-            WIDTH - 118,
-            126,
-            90,
-            34,
+            scaled_w - s(118),
+            s(126),
+            s(90),
+            s(34),
             hwnd,
             CANCEL_ID as _,
             hinstance,
             std::ptr::null(),
         );
+        let font = create_font((dpi as f32 / 96.0).max(1.0), 14.0, 400);
         if let Some(state) = state() {
             state.edit = edit;
+            state.font = font;
         }
-        // 输入框也用统一字体。
-        if !edit.is_null() {
-            let font = create_font(
-                (GetDpiForWindow(hwnd) as f32 / 96.0).max(1.0),
-                14.0,
-                400,
-            );
-            if !font.is_null() {
-                // 控件句柄有效。
-                let dc = windows_sys::Win32::Graphics::Gdi::GetDC(edit);
-                SelectObject(dc, font as _);
-                windows_sys::Win32::Graphics::Gdi::ReleaseDC(edit, dc);
-            }
+        // 输入框也用统一缩放字体。
+        if !edit.is_null() && !font.is_null() {
+            SendMessageW(edit, WM_SETFONT, font as usize, 1);
         }
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
@@ -471,11 +485,12 @@ fn paint(hwnd: HWND) {
             .map(|state| state.title.clone())
             .unwrap_or_else(|| crate::i18n::t("新建分组", "New group").to_string());
         let label = wide(&title);
+        let margin = (24.0 * scale).round() as i32;
         let mut rect = RECT {
-            left: 24,
-            top: 24,
-            right: client.right - 24,
-            bottom: 60,
+            left: margin,
+            top: margin,
+            right: client.right - margin,
+            bottom: (60.0 * scale).round() as i32,
         };
         // SAFETY: DC 与字体有效。
         let previous = if font.is_null() {

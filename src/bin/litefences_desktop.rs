@@ -52,7 +52,7 @@ mod icons;
 #[path = "litefences_desktop/log.rs"]
 mod log;
 #[cfg(windows)]
-#[path = "litefences_desktop/overlay.rs"]
+#[path = "litefences_desktop/overlay/mod.rs"]
 mod overlay;
 #[cfg(windows)]
 #[path = "litefences_desktop/picker.rs"]

@@ -12,6 +12,7 @@ pub struct Group {
     pub collapsed: bool,
     pub paths: Vec<PathBuf>,
     pub rules: Vec<String>,
+    pub color: Option<String>,
     /// 文件夹入口：值为 portals 里的序号；普通分组为 None。
     pub portal: Option<usize>,
 }
@@ -24,6 +25,7 @@ impl Group {
             collapsed: false,
             paths: Vec::new(),
             rules: Vec::new(),
+            color: None,
             portal: None,
         }
     }
@@ -50,6 +52,7 @@ pub fn load() -> Vec<Group> {
             collapsed: entry.collapsed,
             paths: entry.paths.into_iter().map(PathBuf::from).collect(),
             rules: entry.rules,
+            color: entry.color,
             portal: None,
         })
         .collect()
@@ -70,6 +73,7 @@ pub fn save(groups: &[Group]) {
                 .map(|path| path.to_string_lossy().to_string())
                 .collect(),
             rules: group.rules.clone(),
+            color: group.color.clone(),
         })
         .collect();
     crate::store::save(&config);

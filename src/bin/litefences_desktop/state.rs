@@ -188,6 +188,16 @@ pub struct HeaderDragState {
     pub target: Option<usize>,
 }
 
+/// 空白区域鼠标拉框多选状态（客户区坐标）。
+#[derive(Clone)]
+pub struct MarqueeState {
+    pub start: (i32, i32),
+    pub current: (i32, i32),
+    pub active: bool,
+    pub additive: bool,
+    pub base_selection: Vec<usize>,
+}
+
 /// 单步撤销快照：记录改动前的面板数据，撤销时重新扫描并按快照恢复。
 #[derive(Clone)]
 pub struct UndoSnapshot {
@@ -247,6 +257,8 @@ pub struct App {
     pub drag: Option<DragState>,
     /// 拖动分组标题调整顺序。
     pub header_drag: Option<HeaderDragState>,
+    /// 空白区鼠标拉框多选状态。
+    pub marquee: Option<MarqueeState>,
     /// 鼠标多选：Ctrl 点选追加/取消，Shift 连选。
     pub selection: Vec<usize>,
     /// 连选起点。
@@ -280,12 +292,20 @@ pub struct App {
     pub onboarded: bool,
     /// 键盘选中的图标索引（方向键 / Enter 用）。
     pub selected: Option<usize>,
+    /// 「最近常用」置顶栏当前键盘选中的槽位索引（与 `selected` 互斥）。
+    pub recent_selected: Option<usize>,
     /// 搜索关键字（空 = 不过滤）。
     pub search: String,
     /// 是否自动检查更新（可在托盘菜单关闭）。
     pub check_updates: bool,
     /// 图标尺寸档位（紧凑 / 标准 / 偏大）。
     pub density: crate::settings::IconDensity,
+    /// 是否在面板顶部显示「最近常用」栏。
+    pub show_recent: bool,
+    /// 前台全屏应用运行时是否跳过唤出。
+    pub ignore_fullscreen: bool,
+    /// 多屏唤出位置策略。
+    pub monitor_policy: crate::settings::MonitorPolicy,
     /// 搜索栏是否展开。
     pub search_open: bool,
     /// 搜索栏展开/收起的动画起点。

@@ -65,6 +65,15 @@ pub struct SettingsSection {
     /// 图标尺寸档位：`compact` / `normal` / `large`。
     #[serde(default = "default_density")]
     pub density: String,
+    /// 是否在面板顶部显示「最近常用」栏。
+    #[serde(default = "default_true")]
+    pub show_recent: bool,
+    /// 前台全屏应用运行时是否跳过唤出。
+    #[serde(default = "default_true")]
+    pub ignore_fullscreen: bool,
+    /// 多屏唤出位置策略：`cursor` / `primary`。
+    #[serde(default = "default_monitor")]
+    pub monitor: String,
 }
 
 fn default_true() -> bool {
@@ -73,6 +82,10 @@ fn default_true() -> bool {
 
 fn default_density() -> String {
     "normal".to_string()
+}
+
+fn default_monitor() -> String {
+    "cursor".to_string()
 }
 
 impl Default for SettingsSection {
@@ -84,6 +97,9 @@ impl Default for SettingsSection {
             lang: "auto".to_string(),
             check_updates: true,
             density: default_density(),
+            show_recent: true,
+            ignore_fullscreen: true,
+            monitor: default_monitor(),
         }
     }
 }
@@ -107,6 +123,9 @@ pub struct GroupEntry {
     /// 自动归组规则：扩展名（如 `.pdf`）或名称关键字（如 `会议`）。
     #[serde(default)]
     pub rules: Vec<String>,
+    /// 分组强调色标 key（如 `blue` / `green`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -395,6 +414,7 @@ fn migrate_groups(dir: &std::path::Path) -> Vec<GroupEntry> {
                     collapsed,
                     paths: Vec::new(),
                     rules: Vec::new(),
+                    color: None,
                 });
             }
             continue;
@@ -470,6 +490,7 @@ mod tests {
             collapsed: true,
             paths: vec!["C:\\dev\\a.txt".into()],
             rules: Vec::new(),
+            color: None,
         });
         config.items.push(ItemEntry {
             path: "C:\\dev\\a.txt".into(),
@@ -493,6 +514,9 @@ mod tests {
         assert_eq!(config.settings.theme, "space");
         assert!(config.groups.is_empty());
         assert!(config.usage.is_empty());
+        assert!(config.settings.show_recent);
+        assert!(config.settings.ignore_fullscreen);
+        assert_eq!(config.settings.monitor, "cursor");
     }
 
     #[test]
@@ -549,6 +573,7 @@ mod tests {
             collapsed: true,
             paths: vec!["C:\\Tools\\a.exe".into()],
             rules: Vec::new(),
+            color: None,
         });
         let text = serde_json::to_string_pretty(&config).unwrap();
         std::fs::write(&file, &text).unwrap();
@@ -575,9 +600,31 @@ mod tests {
             collapsed: false,
             paths: vec![],
             rules: vec![".pdf".into(), "报告".into()],
+            color: None,
         });
         let back: Config = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
         assert_eq!(back.groups[0].rules, vec![".pdf", "报告"]);
+    }
+
+    #[test]
+    fn group_color_serializes_and_defaults_to_none() {
+        let legacy = r#"{"version":1,"groups":[{"name":"开发","collapsed":false,"paths":[]}]}"#.as_bytes();
+        let parsed = parse_import(legacy).unwrap();
+        assert_eq!(parsed.groups[0].color, None);
+
+        let mut cfg = Config {
+            version: CONFIG_VERSION,
+            ..Default::default()
+        };
+        cfg.groups.push(GroupEntry {
+            name: "开发".into(),
+            collapsed: false,
+            paths: vec![],
+            rules: vec![],
+            color: Some("blue".into()),
+        });
+        let back: Config = serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(back.groups[0].color.as_deref(), Some("blue"));
     }
 
     #[test]

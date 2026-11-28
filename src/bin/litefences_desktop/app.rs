@@ -186,6 +186,7 @@ pub fn run() -> std::process::ExitCode {
         layout_order: icons::load_order(),
         drag: None,
         header_drag: None,
+        marquee: None,
         selection: Vec::new(),
         selection_anchor: None,
         undo_stack: Vec::new(),
@@ -202,9 +203,13 @@ pub fn run() -> std::process::ExitCode {
         lang_setting: initial_settings.lang.clone(),
         onboarded: initial_config.onboarded,
         selected: None,
+        recent_selected: None,
         search: String::new(),
         check_updates: initial_settings.check_updates,
         density: initial_settings.density,
+        show_recent: initial_settings.show_recent,
+        ignore_fullscreen: initial_settings.ignore_fullscreen,
+        monitor_policy: initial_settings.monitor,
         search_open: false,
         search_anim: None,
         fold: None,
@@ -633,7 +638,127 @@ fn persist_settings() {
         lang: app.lang_setting.clone(),
         check_updates: app.check_updates,
         density: app.density,
+        show_recent: app.show_recent,
+        ignore_fullscreen: app.ignore_fullscreen,
+        monitor: app.monitor_policy,
     });
+}
+
+/// 切换「全屏应用防误触」开关并持久化。
+pub fn set_ignore_fullscreen(enabled: bool) {
+    let app = state();
+    if app.ignore_fullscreen == enabled {
+        return;
+    }
+    app.ignore_fullscreen = enabled;
+    persist_settings();
+    log::info(&format!(
+        "全屏应用防误触：{}",
+        if enabled { "开启" } else { "关闭" }
+    ));
+}
+
+/// 切换多屏唤出位置策略并持久化。
+pub fn set_monitor_policy(policy: crate::settings::MonitorPolicy) {
+    let app = state();
+    if app.monitor_policy == policy {
+        return;
+    }
+    app.monitor_policy = policy;
+    persist_settings();
+    log::info(&format!("唤出屏幕策略改为：{}", policy.as_str()));
+    if app.shown {
+        overlay::hide_panel();
+        overlay::show_panel();
+    }
+}
+
+/// 清空「最近常用」启动历史记录并刷新面板。
+pub fn clear_usage_history() {
+    let app = state();
+    if app.usage.is_empty() {
+        return;
+    }
+    app.usage.clear();
+    app.recent_selected = None;
+    crate::store::save_usage(&app.usage);
+    log::info("已清空最近常用记录");
+    overlay::relayout();
+    if state().shown {
+        overlay::show_drop_notice(
+            crate::i18n::t("已清空最近常用记录", "Recent history cleared").into(),
+        );
+    }
+}
+
+fn hidden_item_label(path: &std::path::Path) -> String {
+    path.file_stem()
+        .or_else(|| path.file_name())
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// 恢复单个被隐藏的桌面图标（取消面板隐藏，不动源文件）。
+pub fn restore_hidden_item(index: usize) {
+    let app = state();
+    if index >= app.hidden.len() {
+        return;
+    }
+    remember_undo("restore");
+    let path = app.hidden.remove(index);
+    let label = hidden_item_label(&path);
+    icons::save_hidden(&app.hidden);
+    app.desktop_stamp = None;
+    log::info(&format!("已恢复隐藏桌面图标：{}", path.display()));
+    begin_scan(app.host);
+    if state().shown {
+        let notice = if crate::i18n::is_en() {
+            format!("Restored \"{label}\"")
+        } else {
+            format!("已恢复「{label}」")
+        };
+        overlay::show_drop_notice(notice);
+    }
+}
+
+/// 恢复全部被隐藏的桌面图标。
+pub fn restore_all_hidden() {
+    let app = state();
+    if app.hidden.is_empty() {
+        return;
+    }
+    remember_undo("restore");
+    let count = app.hidden.len();
+    app.hidden.clear();
+    icons::save_hidden(&app.hidden);
+    app.desktop_stamp = None;
+    log::info(&format!("已恢复全部 {count} 个隐藏桌面图标"));
+    begin_scan(app.host);
+    if state().shown {
+        let notice = if crate::i18n::is_en() {
+            format!("Restored {count} hidden item(s)")
+        } else {
+            format!("已恢复全部 {count} 个图标")
+        };
+        overlay::show_drop_notice(notice);
+    }
+}
+
+/// 切换「最近常用」置顶栏显示开关并重排面板。
+pub fn set_show_recent(enabled: bool) {
+    let app = state();
+    if app.show_recent == enabled {
+        return;
+    }
+    app.show_recent = enabled;
+    persist_settings();
+    log::info(&format!(
+        "「最近常用」栏：{}",
+        if enabled { "开启" } else { "关闭" }
+    ));
+    overlay::relayout();
 }
 
 /// 切换图标尺寸档位：清图集缓存并立刻重排重绘。
@@ -732,6 +857,9 @@ pub fn import_config_from_picker() {
     crate::i18n::set(crate::i18n::resolve(&loaded_settings.lang));
     app.check_updates = loaded_settings.check_updates;
     app.density = loaded_settings.density;
+    app.show_recent = loaded_settings.show_recent;
+    app.ignore_fullscreen = loaded_settings.ignore_fullscreen;
+    app.monitor_policy = loaded_settings.monitor;
     app.onboarded = imported.onboarded;
     app.usage = imported.usage;
     app.groups = crate::groups::load();
@@ -1319,6 +1447,31 @@ pub fn set_group_rules(group_index: usize, raw_rules: &str) -> Option<usize> {
     Some(moved)
 }
 
+/// 为普通分组设置强调色标（`None` 清除），支持撤销并立即重绘。
+pub fn set_group_color(group_index: usize, color: Option<&str>) {
+    let app = state();
+    let Some(group) = app.groups.get(group_index) else {
+        return;
+    };
+    if group.portal.is_some() {
+        return;
+    }
+    let next = color.filter(|key| crate::theme::group_color_by_key(key).is_some()).map(str::to_string);
+    if group.color == next {
+        return;
+    }
+    remember_undo("color");
+    let name = app.groups[group_index].name.clone();
+    app.groups[group_index].color = next.clone();
+    crate::groups::save(&app.groups);
+    app.static_dirty = true;
+    log::info(&format!(
+        "分组「{name}」色标：{}",
+        next.as_deref().unwrap_or("none")
+    ));
+    overlay::force_repaint();
+}
+
 /// 在文件夹入口中点击子目录时原地切入浏览。
 pub fn enter_portal_subdir(path: &std::path::Path) -> bool {
     let app = state();
@@ -1402,12 +1555,130 @@ pub fn refresh_portal(group_index: usize) {
 /// 清空鼠标多选。
 pub fn clear_selection() {
     let app = state();
-    if app.selection.is_empty() && app.selection_anchor.is_none() {
+    if app.selection.is_empty() && app.selection_anchor.is_none() && app.recent_selected.is_none() {
         return;
     }
     app.selection.clear();
     app.selection_anchor = None;
+    app.recent_selected = None;
     app.static_dirty = true;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GroupSortMode {
+    Name,
+    Extension,
+    Usage,
+}
+
+/// 纯排序计算：给定一组 `items` 下标，按指定模式返回重排后的下标顺序。
+pub fn sort_group_indices(
+    indices: &[usize],
+    items: &[icons::DesktopItem],
+    usage: &std::collections::BTreeMap<String, crate::store::UsageEntry>,
+    mode: GroupSortMode,
+) -> Vec<usize> {
+    let mut ordered = indices.to_vec();
+    match mode {
+        GroupSortMode::Name => {
+            ordered.sort_by(|&a, &b| {
+                items[a]
+                    .name
+                    .to_lowercase()
+                    .cmp(&items[b].name.to_lowercase())
+                    .then_with(|| a.cmp(&b))
+            });
+        }
+        GroupSortMode::Extension => {
+            let ext_key = |item: &icons::DesktopItem| -> (u8, String, String) {
+                let is_dir = item.path.is_dir();
+                let ext = if is_dir {
+                    String::new()
+                } else {
+                    item.path
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_ascii_lowercase())
+                        .unwrap_or_default()
+                };
+                let bucket = if is_dir { 0 } else if ext.is_empty() { 2 } else { 1 };
+                (bucket, ext, item.name.to_lowercase())
+            };
+            ordered.sort_by(|&a, &b| ext_key(&items[a]).cmp(&ext_key(&items[b])).then_with(|| a.cmp(&b)));
+        }
+        GroupSortMode::Usage => {
+            let score = |item: &icons::DesktopItem| -> (u32, u64) {
+                usage
+                    .get(&crate::store::usage_key(&item.path))
+                    .map(|e| (e.count, e.last_used))
+                    .unwrap_or((0, 0))
+            };
+            ordered.sort_by(|&a, &b| {
+                let sa = score(&items[a]);
+                let sb = score(&items[b]);
+                sb.0.cmp(&sa.0)
+                    .then_with(|| sb.1.cmp(&sa.1))
+                    .then_with(|| items[a].name.to_lowercase().cmp(&items[b].name.to_lowercase()))
+                    .then_with(|| a.cmp(&b))
+            });
+        }
+    }
+    ordered
+}
+
+/// 一键对普通分组内部图标排序（接入撤销栈与持久化）。
+pub fn sort_group_items(group_index: usize, mode: GroupSortMode) {
+    let app = state();
+    let Some(group) = app.groups.get(group_index) else {
+        return;
+    };
+    if group.portal.is_some() {
+        return;
+    }
+    let slots: Vec<usize> = app
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| {
+            item.source != icons::ItemSource::Portal
+                && crate::groups::group_of_or_default(&app.groups, &item.path) == Some(group_index)
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if slots.len() < 2 {
+        return;
+    }
+    let ordered = sort_group_indices(&slots, &app.items, &app.usage, mode);
+    if ordered == slots {
+        return;
+    }
+    remember_undo("sort");
+    let mut map: Vec<usize> = (0..app.items.len()).collect();
+    for (dst, src) in slots.iter().zip(ordered.iter()) {
+        map[*dst] = *src;
+    }
+    let mut pool: Vec<Option<icons::DesktopItem>> = app.items.drain(..).map(Some).collect();
+    app.items = map
+        .into_iter()
+        .filter_map(|src| pool[src].take())
+        .collect();
+    let name = crate::groups::display_name(&app.groups[group_index].name);
+    persist_layout();
+    app.tile_cache = None;
+    app.selection.clear();
+    app.selection_anchor = None;
+    app.selected = None;
+    app.recent_selected = None;
+    log::info(&format!("分组「{name}」已按 {mode:?} 排序"));
+    overlay::relayout();
+    if state().shown {
+        let notice = if crate::i18n::is_en() {
+            format!("Sorted \"{name}\"")
+        } else {
+            format!("已整理「{name}」排序")
+        };
+        overlay::show_drop_notice(notice);
+    }
 }
 
 /// 把多个图标移到 `target` 分组。返回实际移动的数量。
@@ -1687,6 +1958,48 @@ mod reorder_tests {
         assert_eq!(undo, vec![0, 1, 2]);
         assert_eq!(cur, 99);
     }
+
+    #[test]
+    fn group_sort_orders_by_name_extension_and_usage() {
+        let dummy = |path: &str, name: &str| crate::icons::DesktopItem {
+            search_keys: Default::default(),
+            offline: false,
+            path: std::path::PathBuf::from(path),
+            name: name.to_string(),
+            icon: std::ptr::null_mut(),
+            source: crate::icons::ItemSource::Custom,
+            custom_icon: None,
+        };
+        let items = vec![
+            dummy(r"C:\docs\zeta.txt", "Zeta"),
+            dummy(r"C:\docs\alpha.pdf", "Alpha"),
+            dummy(r"C:\docs\beta.exe", "Beta"),
+            dummy(r"C:\docs\plain", "Plain"),
+        ];
+        let mut usage = std::collections::BTreeMap::new();
+        usage.insert(
+            crate::store::usage_key(&items[0].path),
+            crate::store::UsageEntry { count: 2, last_used: 50 },
+        );
+        usage.insert(
+            crate::store::usage_key(&items[2].path),
+            crate::store::UsageEntry { count: 9, last_used: 10 },
+        );
+
+        let slots = vec![0, 1, 2, 3];
+        assert_eq!(
+            super::sort_group_indices(&slots, &items, &usage, super::GroupSortMode::Name),
+            vec![1, 2, 3, 0]
+        );
+        assert_eq!(
+            super::sort_group_indices(&slots, &items, &usage, super::GroupSortMode::Extension),
+            vec![2, 1, 0, 3] // .exe, .pdf, .txt, 无扩展名
+        );
+        assert_eq!(
+            super::sort_group_indices(&slots, &items, &usage, super::GroupSortMode::Usage),
+            vec![2, 0, 1, 3]
+        );
+    }
 }
 
 /// 当前进程的完整性级别 RID：0x1000 = 低，0x2000 = 中，0x3000 = 高。
@@ -1905,6 +2218,9 @@ fn change_hotkey() {
             lang: app.lang_setting.clone(),
             check_updates: app.check_updates,
             density: app.density,
+            show_recent: app.show_recent,
+            ignore_fullscreen: app.ignore_fullscreen,
+            monitor: app.monitor_policy,
         });
     }
     log::info(&format!("唤出热键已改为 {}", chosen.describe()));
@@ -2008,6 +2324,10 @@ unsafe extern "system" fn host_proc(
                 HOTKEY_TOGGLE => {
                     if state().shown {
                         overlay::hide_panel();
+                    } else if state().ignore_fullscreen
+                        && crate::util::is_foreground_fullscreen(&[state().host, state().overlay])
+                    {
+                        log::info("前台全屏应用运行中，已跳过热键唤出");
                     } else {
                         overlay::show_panel();
                     }
@@ -2167,6 +2487,15 @@ fn handle_menu(host: HWND) {
     let hotkey_text = state().hotkey.describe();
     let theme_key = state().theme.key;
     let density = state().density;
+    let show_recent = state().show_recent;
+    let has_usage = !state().usage.is_empty();
+    let hidden_labels: Vec<String> = state()
+        .hidden
+        .iter()
+        .map(|p| hidden_item_label(p))
+        .collect();
+    let ignore_fullscreen = state().ignore_fullscreen;
+    let monitor_policy = state().monitor_policy;
     let lang_setting = state().lang_setting.clone();
     let check_updates = state().check_updates;
     let command = tray::show_menu(
@@ -2175,6 +2504,11 @@ fn handle_menu(host: HWND) {
         &hotkey_text,
         theme_key,
         density,
+        show_recent,
+        has_usage,
+        &hidden_labels,
+        ignore_fullscreen,
+        monitor_policy,
         &lang_setting,
         check_updates,
     );
@@ -2190,12 +2524,31 @@ fn handle_command(command: usize) {
         tray::MENU_ADD_PORTAL => add_portal_from_picker(),
         tray::MENU_EXPORT_CONFIG => export_config_from_picker(),
         tray::MENU_IMPORT_CONFIG => import_config_from_picker(),
+        tray::MENU_SHOW_RECENT => {
+            let enabled = !state().show_recent;
+            set_show_recent(enabled);
+        }
+        tray::MENU_CLEAR_RECENT => clear_usage_history(),
+        tray::MENU_IGNORE_FULLSCREEN => {
+            let enabled = !state().ignore_fullscreen;
+            set_ignore_fullscreen(enabled);
+        }
+        tray::MENU_RESTORE_ALL_HIDDEN => restore_all_hidden(),
         tray::MENU_CHECK_UPDATE => crate::update::check(state().host, true),
         tray::MENU_AUTO_UPDATE => {
             let enabled = !state().check_updates;
             set_check_updates(enabled);
         }
         tray::MENU_EXIT => request_exit(state().host),
+        other if other >= tray::MENU_RESTORE_HIDDEN_BASE => {
+            restore_hidden_item(other - tray::MENU_RESTORE_HIDDEN_BASE);
+        }
+        other if other >= tray::MENU_MONITOR_BASE => {
+            let index = other - tray::MENU_MONITOR_BASE;
+            if let Some(&policy) = crate::settings::MonitorPolicy::all().get(index) {
+                set_monitor_policy(policy);
+            }
+        }
         other if other >= tray::MENU_LANG_BASE => {
             let index = other - tray::MENU_LANG_BASE;
             if let Some(setting) = ["auto", "zh", "en"].get(index) {

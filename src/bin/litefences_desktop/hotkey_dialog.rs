@@ -17,10 +17,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetCursorPos,
-    GetMessageW, IDC_ARROW, LoadCursorW, MSG, RegisterClassW, SW_SHOW,
-    SetForegroundWindow, ShowWindow, TranslateMessage, WM_CLOSE, WM_DESTROY,
-    WM_ERASEBKGND, WM_KEYDOWN, WM_PAINT, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_POPUP,
+    GetMessageW, HWND_TOP, IDC_ARROW, LoadCursorW, MSG, RegisterClassW, SWP_NOACTIVATE,
+    SWP_NOZORDER, SW_SHOW, SetForegroundWindow, SetWindowPos, ShowWindow, TranslateMessage,
+    WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_PAINT, WM_SYSKEYDOWN, WNDCLASSW,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::log;
@@ -110,14 +110,10 @@ fn create_window() -> Option<HWND> {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
-        let (left, top) = if GetMonitorInfoW(monitor, &mut info) != 0 {
-            let area = info.rcMonitor;
-            (
-                area.left + (area.right - area.left - WINDOW_WIDTH) / 2,
-                area.top + (area.bottom - area.top - WINDOW_HEIGHT) / 2,
-            )
-        } else {
-            (400, 300)
+        let work = (GetMonitorInfoW(monitor, &mut info) != 0).then_some(info.rcWork);
+        let (left, top) = match work {
+            Some(area) => crate::util::center_in_rect(area, WINDOW_WIDTH, WINDOW_HEIGHT),
+            None => (400, 300),
         };
         let title = wide(crate::i18n::t("设置唤出热键", "Set hotkey"));
         let hwnd = CreateWindowExW(
@@ -138,6 +134,22 @@ fn create_window() -> Option<HWND> {
             log::error("无法创建热键设置窗口");
             return None;
         }
+        let dpi = GetDpiForWindow(hwnd).max(96);
+        let scaled_w = crate::util::scale_i32(WINDOW_WIDTH, dpi);
+        let scaled_h = crate::util::scale_i32(WINDOW_HEIGHT, dpi);
+        let (scaled_left, scaled_top) = match work {
+            Some(area) => crate::util::center_in_rect(area, scaled_w, scaled_h),
+            None => (left, top),
+        };
+        SetWindowPos(
+            hwnd,
+            HWND_TOP,
+            scaled_left,
+            scaled_top,
+            scaled_w,
+            scaled_h,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
         ShowWindow(hwnd, SW_SHOW);
         UpdateWindow(hwnd);
         SetForegroundWindow(hwnd);
@@ -299,15 +311,16 @@ fn paint(hwnd: HWND) {
             ),
         };
 
+        let s = |y: i32| (y as f32 * scale).round() as i32;
         draw_text(
             hdc,
             title_font,
             &title,
             RECT {
                 left: 0,
-                top: 24,
+                top: s(24),
                 right: client.right,
-                bottom: 56,
+                bottom: s(56),
             },
             0x00D0_D0D0,
         );
@@ -317,9 +330,9 @@ fn paint(hwnd: HWND) {
             &value,
             RECT {
                 left: 0,
-                top: 62,
+                top: s(62),
                 right: client.right,
-                bottom: 118,
+                bottom: s(118),
             },
             0x00FF_FFFF,
         );
@@ -329,9 +342,9 @@ fn paint(hwnd: HWND) {
             &hint,
             RECT {
                 left: 0,
-                top: 126,
+                top: s(126),
                 right: client.right,
-                bottom: 172,
+                bottom: s(172),
             },
             0x00A0_A0A0,
         );

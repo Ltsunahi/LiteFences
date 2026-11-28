@@ -8,8 +8,8 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, IDI_APPLICATION, LoadIconW, MF_CHECKED,
-    MF_SEPARATOR, MF_STRING, PostMessageW, RegisterWindowMessageW, SetForegroundWindow,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, PostMessageW, RegisterWindowMessageW,
+    SetForegroundWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
 };
 
 use crate::log;
@@ -26,12 +26,20 @@ pub const MENU_CHECK_UPDATE: usize = 1008;
 pub const MENU_AUTO_UPDATE: usize = 1009;
 pub const MENU_EXPORT_CONFIG: usize = 1010;
 pub const MENU_IMPORT_CONFIG: usize = 1011;
+pub const MENU_SHOW_RECENT: usize = 1012;
+pub const MENU_CLEAR_RECENT: usize = 1013;
+pub const MENU_IGNORE_FULLSCREEN: usize = 1014;
+pub const MENU_RESTORE_ALL_HIDDEN: usize = 1015;
 /// 主题菜单项的起始编号：`MENU_THEME_BASE + 主题序号`。
 pub const MENU_THEME_BASE: usize = 1100;
 /// 图标大小档位：`MENU_DENSITY_BASE + 档位序号`。
 pub const MENU_DENSITY_BASE: usize = 1200;
 /// 语言菜单项：跟随系统 / 中文 / English。
 pub const MENU_LANG_BASE: usize = 1300;
+/// 多屏唤出位置策略：`MENU_MONITOR_BASE + 策略序号`。
+pub const MENU_MONITOR_BASE: usize = 1400;
+/// 恢复已隐藏桌面图标：`MENU_RESTORE_HIDDEN_BASE + hidden 序号`。
+pub const MENU_RESTORE_HIDDEN_BASE: usize = 1500;
 /// 用户点击托盘气泡时 `lparam` 低 16 位里的通知码。
 pub const NIN_BALLOONUSERCLICK: u32 = 1029;
 
@@ -131,6 +139,11 @@ pub fn show_menu(
     hotkey_text: &str,
     theme_key: &str,
     density: crate::settings::IconDensity,
+    show_recent: bool,
+    has_usage: bool,
+    hidden_labels: &[String],
+    ignore_fullscreen: bool,
+    monitor_policy: crate::settings::MonitorPolicy,
     lang_setting: &str,
     check_updates: bool,
 ) -> usize {
@@ -172,6 +185,87 @@ pub fn show_menu(
         let import_cfg = wide(crate::i18n::t("导入配置…", "Import settings…"));
         AppendMenuW(menu, MF_STRING, MENU_EXPORT_CONFIG, export_cfg.as_ptr());
         AppendMenuW(menu, MF_STRING, MENU_IMPORT_CONFIG, import_cfg.as_ptr());
+        let recent_label = wide(if show_recent {
+            crate::i18n::t("显示「最近常用」栏（已开启）", "Show Recent bar (on)")
+        } else {
+            crate::i18n::t("显示「最近常用」栏（已关闭）", "Show Recent bar (off)")
+        });
+        let recent_flags = if show_recent {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        AppendMenuW(menu, recent_flags, MENU_SHOW_RECENT, recent_label.as_ptr());
+        let clear_recent = wide(crate::i18n::t("清空最近常用记录", "Clear Recent history"));
+        let clear_flags = if has_usage {
+            MF_STRING
+        } else {
+            MF_STRING | MF_GRAYED
+        };
+        AppendMenuW(menu, clear_flags, MENU_CLEAR_RECENT, clear_recent.as_ptr());
+        let hidden_sub = CreatePopupMenu();
+        if !hidden_sub.is_null() {
+            if hidden_labels.is_empty() {
+                let empty_label = wide(crate::i18n::t("无隐藏图标", "No hidden icons"));
+                AppendMenuW(hidden_sub, MF_STRING | MF_GRAYED, 0, empty_label.as_ptr());
+            } else {
+                let restore_all = wide(&if crate::i18n::is_en() {
+                    format!("Restore all ({})", hidden_labels.len())
+                } else {
+                    format!("恢复全部（{}）", hidden_labels.len())
+                });
+                AppendMenuW(hidden_sub, MF_STRING, MENU_RESTORE_ALL_HIDDEN, restore_all.as_ptr());
+                AppendMenuW(hidden_sub, MF_SEPARATOR, 0, std::ptr::null());
+                let items: Vec<_> = hidden_labels.iter().take(30).map(|s| wide(s)).collect();
+                for (index, label) in items.iter().enumerate() {
+                    AppendMenuW(
+                        hidden_sub,
+                        MF_STRING,
+                        MENU_RESTORE_HIDDEN_BASE + index,
+                        label.as_ptr(),
+                    );
+                }
+            }
+            let hidden_title = wide(&if crate::i18n::is_en() {
+                format!("Hidden desktop icons ({})", hidden_labels.len())
+            } else {
+                format!("已隐藏的桌面图标（{}）", hidden_labels.len())
+            });
+            if AppendMenuW(menu, MF_POPUP, hidden_sub as usize, hidden_title.as_ptr()) == 0 {
+                DestroyMenu(hidden_sub);
+            }
+        }
+        AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+        let fs_label = wide(if ignore_fullscreen {
+            crate::i18n::t("全屏应用防误触（已开启）", "Skip during fullscreen apps (on)")
+        } else {
+            crate::i18n::t("全屏应用防误触（已关闭）", "Skip during fullscreen apps (off)")
+        });
+        let fs_flags = if ignore_fullscreen {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        AppendMenuW(menu, fs_flags, MENU_IGNORE_FULLSCREEN, fs_label.as_ptr());
+        let monitor_labels: Vec<_> = crate::settings::MonitorPolicy::all()
+            .iter()
+            .map(|policy| {
+                wide(&format!(
+                    "{} {}",
+                    crate::i18n::t("唤出屏幕：", "Summon monitor:"),
+                    policy.label()
+                ))
+            })
+            .collect();
+        let current_monitor = monitor_policy.index();
+        for (index, label) in monitor_labels.iter().enumerate() {
+            let flags = if index == current_monitor {
+                MF_STRING | MF_CHECKED
+            } else {
+                MF_STRING
+            };
+            AppendMenuW(menu, flags, MENU_MONITOR_BASE + index, label.as_ptr());
+        }
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
         let check = wide(crate::i18n::t("检查更新…", "Check for updates…"));
         let auto_update = wide(if check_updates {
@@ -248,6 +342,9 @@ pub fn show_menu(
     let mut point = windows_sys::Win32::Foundation::POINT::default();
     // SAFETY: 输出结构体有效。
     unsafe { GetCursorPos(&mut point) };
+    if let Some(work) = crate::util::monitor_work_area_at(point) {
+        point = crate::util::clamp_point_in_rect(point, work);
+    }
     // 托盘菜单需要先把自己设为前台，否则点击别处不会关闭菜单。
     unsafe { SetForegroundWindow(host) };
     // SAFETY: 菜单与窗口句柄有效；RETURNCMD 让返回值直接是命令号。

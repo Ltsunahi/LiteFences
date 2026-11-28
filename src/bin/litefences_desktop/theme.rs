@@ -184,9 +184,86 @@ pub fn mix(from: u32, to: u32, ratio: f32) -> u32 {
     channel(0) | channel(8) | channel(16)
 }
 
+#[derive(Clone, Copy)]
+pub struct GroupColor {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub name_en: &'static str,
+    /// `COLORREF` (`0x00BBGGRR`)。
+    pub color: u32,
+}
+
+impl GroupColor {
+    pub fn display_name(&self) -> &'static str {
+        if crate::i18n::is_en() {
+            self.name_en
+        } else {
+            self.name
+        }
+    }
+}
+
+pub const GROUP_COLORS: &[GroupColor] = &[
+    GroupColor {
+        key: "blue",
+        name: "蓝",
+        name_en: "Blue",
+        color: 0x00FF_9E4C,
+    },
+    GroupColor {
+        key: "green",
+        name: "绿",
+        name_en: "Green",
+        color: 0x0078_D250,
+    },
+    GroupColor {
+        key: "amber",
+        name: "琥珀",
+        name_en: "Amber",
+        color: 0x0046_B8FF,
+    },
+    GroupColor {
+        key: "coral",
+        name: "珊瑚红",
+        name_en: "Coral",
+        color: 0x006B_6BFF,
+    },
+    GroupColor {
+        key: "purple",
+        name: "紫",
+        name_en: "Purple",
+        color: 0x00FF_84B4,
+    },
+    GroupColor {
+        key: "cyan",
+        name: "青",
+        name_en: "Cyan",
+        color: 0x00E0_D040,
+    },
+];
+
+pub fn group_color_by_key(key: &str) -> Option<u32> {
+    let key = key.trim();
+    GROUP_COLORS
+        .iter()
+        .find(|entry| entry.key.eq_ignore_ascii_case(key))
+        .map(|entry| entry.color)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_colors_have_unique_keys_and_lookup() {
+        let mut keys = std::collections::BTreeSet::new();
+        for entry in GROUP_COLORS {
+            assert!(keys.insert(entry.key));
+            assert_eq!(group_color_by_key(entry.key), Some(entry.color));
+        }
+        assert_eq!(group_color_by_key(" BLUE "), Some(0x00FF_9E4C));
+        assert_eq!(group_color_by_key("unknown"), None);
+    }
 
     #[test]
     fn by_key_falls_back_to_default() {
