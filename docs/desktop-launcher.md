@@ -784,3 +784,29 @@ INFO 桌面目录：C:\Users\16\Desktop | C:\Users\Public\Desktop
 - `cargo build --release --features shell --offline`：零警告通过。
 - `cargo test --release --features shell --offline --bin litefences-desktop`：55 项单元测试全部通过（含折叠动画曲线、图集缓存、20 步撤销重做、搜索权重与后缀/分组筛选、图标尺寸档位、自动归组规则、配置导入导出校验）。
 - 正常桌面实测：`--self-test` 输出 `failures=0`，`LiteFences-0.3.7-x64.msi` 安装包经检验 `ProductVersion=0.3.7`。
+
+## 0.3.8（2026-11-28）
+
+### 工程拆分与多屏 / DPI 核查
+
+- **拆分 `overlay.rs`**：将原 5,385 行单文件拆分为 `overlay/{mod,layout,render,menu,input}.rs` 五个职责子模块（窗口生命周期、布局与纯几何、绘制渲染、右键与操作菜单、消息循环与键盘/拖拽输入），并同步调整 `litefences_desktop.rs`。
+- **负坐标副屏与混合 DPI 适配**：
+  - `util.rs` 新增 `center_in_rect`、`clamp_point_in_rect`、`scale_i32`、`monitor_work_area_at`，确保副屏在主屏左侧或上方（`left < 0` 或 `top < 0`）时居中与菜单坐标夹紧不越界；
+  - `backdrop.rs` 对负坐标桌面先 1:1 `BitBlt` 到临时位图再执行 `HALFTONE StretchBlt`，避免部分显卡驱动对负源坐标缩放偏移；
+  - `overlay/mod.rs` 调整 `show_panel` 为就位、抓屏和预渲染后再显示，`reshow` 优先沿用原窗口显示器并在尺寸/DPI 变更时重算布局并重建磨砂底板；
+  - `overlay/input.rs` `WM_DPICHANGED` 清空图集缓存并优先锁定全屏 `rcMonitor`；`text_input.rs` 与 `hotkey_dialog.rs` 按显示器真实 DPI 缩放并居中在 `rcWork`。
+- **CI 校验补全**：`.github/workflows/ci.yml` 在 `Build (shell launcher)` 中加入 `RUSTFLAGS: "-D warnings"`，并将测试步设置为完整输出。
+
+### 新增功能
+
+1. **「最近常用」置顶栏**：复用 `config.usage`（次数 + 最近时间，排除离线项）在面板顶部呈现最多 8 个高频入口；支持方向键在栏位与网格首行间切换、左键直开与右键菜单、`settings.show_recent` 显隐开关及「清空最近常用记录」。
+2. **分组色标区分**：`theme::GROUP_COLORS` 提供 6 色预设并持久化在 `groups[].color`，普通分组标题右侧可设为标题左侧色条圆点与内容区左边缘强调竖线，支持撤销。
+3. **普通分组一键排序**：普通分组标题右键「组内排序」支持按名称、类型（扩展名）与常用频次排序（`app::sort_group_items`），接入 20 步撤销栈。
+4. **空白区鼠标拉框多选**：在内容空白处按住拖动绘出主题色半透明选框实时圈选图标（`Ctrl` 累加），单击空白仍照旧收起面板。
+5. **面板内恢复隐藏桌面图标与 `Ctrl+Enter`**：托盘与设置菜单新增「已隐藏的桌面图标」子菜单支持一键恢复单项或全部（接入撤销栈）；键盘选中项按 `Ctrl+Enter` 直接打开所在位置。
+6. **全屏应用防误触开关与多屏唤出策略**：`settings.ignore_fullscreen` 默认开启，双击桌面或按热键唤出前检测前台是否全屏运行（排除桌面与任务栏窗口类）；`settings.monitor` 支持切换「跟随鼠标所在屏幕」或「固定在主屏」。
+
+### 验证记录
+
+- `RUSTFLAGS='-D warnings' cargo build --release --features shell --locked --offline`：零警告通过。
+- `cargo test --release --features shell --locked --offline --bin litefences-desktop`：67 项单元测试全部通过（含新增负坐标副屏几何、混合 DPI 布局、色标查找与序列化、常用栏筛选/布局/导航、拉框命中、普通分组排序、多屏策略与全屏矩形检测）。
